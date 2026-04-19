@@ -1,0 +1,1974 @@
+"use client";
+
+import Image from "next/image";
+import { ChangeEvent, FormEvent, useEffect, useState, useTransition } from "react";
+import { supabase } from "@/lib/supabase";
+import {
+  calculateLoanValues,
+  formatCurrency,
+  formatDate,
+  formatShortDate,
+  roundCurrency,
+} from "@/lib/loan-utils";
+
+type Cliente = {
+  id: string;
+  nombre: string;
+  direccion: string;
+  telefono: string;
+  correo: string;
+  fotoUrl: string;
+  createdAt: string;
+};
+
+type Prestamo = {
+  id: string;
+  clienteId: string;
+  montoCapital: number;
+  numeroCuotas: number;
+  porcentajeInteres: number;
+  totalCobrar: number;
+  valorCuota: number;
+  saldoRestante: number;
+  cuotasPagadas: number;
+  estado: string;
+  createdAt: string;
+};
+
+type Pago = {
+  id: string;
+  prestamoId: string;
+  clienteId: string;
+  monto: number;
+  cuotaNumero: number;
+  createdAt: string;
+};
+
+type ReceiptData = {
+  cliente: Cliente;
+  prestamo: Prestamo;
+  pago: Pago;
+};
+
+type LoanEditForm = {
+  prestamoId: string;
+  clienteId: string;
+  montoCapital: string;
+  numeroCuotas: string;
+  estado: string;
+};
+
+const LOCAL_ACCESS_KEY = "camilobm-local-access";
+const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
+const APP_USERNAME = process.env.NEXT_PUBLIC_APP_USERNAME ?? "CamiloBM";
+const APP_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD ?? "12345678";
+const SUPABASE_LOGIN_EMAIL = process.env.NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL ?? "";
+const BRAND_NAME = "Creditos CB";
+
+function mapCliente(row: Record<string, unknown>): Cliente {
+  return {
+    id: String(row.id ?? ""),
+    nombre: String(row.nombre ?? ""),
+    direccion: String(row.direccion ?? ""),
+    telefono: String(row.telefono ?? ""),
+    correo: String(row.correo ?? row.email ?? ""),
+    fotoUrl: String(row.foto_url ?? row.foto ?? ""),
+    createdAt: String(
+      row.fecha_registro ??
+        row.created_at ??
+        row.fecha_creacion ??
+        row.fecha ??
+        row.createdAt ??
+        new Date().toISOString(),
+    ),
+  };
+}
+
+function mapPrestamo(row: Record<string, unknown>): Prestamo {
+  const totalCobrar = Number(row.total_a_pagar ?? row.total_cobrar ?? row.total ?? 0);
+  const montoCapital = Number(row.monto_prestado ?? row.monto_capital ?? row.capital ?? 0);
+  const porcentajeInteres = Number(
+    row.porcentaje_interes ??
+      row.interes_porcentaje ??
+      (montoCapital > 0 ? ((totalCobrar - montoCapital) / montoCapital) * 100 : 20),
+  );
+
+  return {
+    id: String(row.id ?? ""),
+    clienteId: String(row.cliente_id ?? ""),
+    montoCapital,
+    numeroCuotas: Number(row.numero_cuotas ?? row.cuotas ?? 0),
+    porcentajeInteres: roundCurrency(porcentajeInteres),
+    totalCobrar,
+    valorCuota: Number(row.valor_cuota ?? row.cuota_valor ?? 0),
+    saldoRestante: totalCobrar,
+    cuotasPagadas: 0,
+    estado: String(row.estado ?? (totalCobrar <= 0 ? "pagado" : "activo")),
+    createdAt: String(
+      row.fecha_inicio ??
+        row.created_at ??
+        row.fecha_creacion ??
+        row.fecha ??
+        row.createdAt ??
+        new Date().toISOString(),
+    ),
+  };
+}
+
+function mapPago(row: Record<string, unknown>): Pago {
+  return {
+    id: String(row.id ?? ""),
+    prestamoId: String(row.prestamo_id ?? ""),
+    clienteId: String(row.cliente_id ?? ""),
+    monto: Number(row.monto_pagado ?? row.monto ?? row.valor_pago ?? 0),
+    cuotaNumero: Number(row.cuota_numero ?? row.cuota_numero ?? row.numero_cuota ?? 0),
+    createdAt: String(
+      row.fecha_pago ??
+      row.created_at ??
+        row.fecha_creacion ??
+        row.fecha ??
+        row.createdAt ??
+        new Date().toISOString(),
+    ),
+  };
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const candidate = error as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+      error_description?: unknown;
+    };
+
+    const parts = [
+      typeof candidate.message === "string" ? candidate.message : "",
+      typeof candidate.details === "string" ? candidate.details : "",
+      typeof candidate.hint === "string" ? candidate.hint : "",
+      typeof candidate.error_description === "string" ? candidate.error_description : "",
+      typeof candidate.code === "string" ? `Codigo: ${candidate.code}` : "",
+    ].filter(Boolean);
+
+    if (parts.length > 0) {
+      return parts.join(" | ");
+    }
+  }
+
+  return "Ocurrio un error inesperado.";
+}
+
+function isSchemaColumnError(message: string) {
+  const normalized = message.toLowerCase();
+
+  return (
+    normalized.includes("column") ||
+    normalized.includes("schema cache") ||
+    normalized.includes("could not find") ||
+    normalized.includes("does not exist") ||
+    normalized.includes("no existe")
+  );
+}
+
+function getLoanStatusLabel(prestamo: Prestamo) {
+  return prestamo.saldoRestante <= 0 ? "Pago de prestamo completado" : "Al dia";
+}
+
+async function selectTableData(table: "clientes" | "prestamos" | "pagos") {
+  const timestampColumns =
+    table === "clientes"
+      ? ["fecha_registro", "created_at", "fecha_creacion", "fecha"]
+      : table === "prestamos"
+        ? ["fecha_inicio", "created_at", "fecha_creacion", "fecha"]
+        : ["fecha_pago", "created_at", "fecha_creacion", "fecha"];
+
+  for (const column of timestampColumns) {
+    const response = await supabase.from(table).select("*").order(column, { ascending: false });
+
+    if (!response.error) {
+      return response;
+    }
+
+    if (!isSchemaColumnError(response.error.message)) {
+      return response;
+    }
+  }
+
+  return supabase.from(table).select("*");
+}
+
+export default function Home() {
+  const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
+  const [authMessage, setAuthMessage] = useState("");
+  const [screenMessage, setScreenMessage] = useState("");
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [prestamos, setPrestamos] = useState<Prestamo[]>([]);
+  const [pagos, setPagos] = useState<Pago[]>([]);
+  const [photoPreview, setPhotoPreview] = useState("");
+  const [activeTab, setActiveTab] = useState<"panel" | "clientes">("panel");
+  const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
+  const [initialCapitalInput, setInitialCapitalInput] = useState(() => {
+    if (typeof window === "undefined") {
+      return "0";
+    }
+
+    return window.localStorage.getItem(INITIAL_CAPITAL_KEY) ?? "0";
+  });
+  const [loanEditForm, setLoanEditForm] = useState<LoanEditForm | null>(null);
+  const [loginForm, setLoginForm] = useState({
+    usuario: APP_USERNAME,
+    clave: APP_PASSWORD,
+  });
+  const [clientForm, setClientForm] = useState({
+    nombre: "",
+    direccion: "",
+    telefono: "",
+    correo: "",
+  });
+  const [loanForm, setLoanForm] = useState({
+    clienteId: "",
+    montoCapital: "",
+    numeroCuotas: "",
+    porcentajeInteres: "20",
+  });
+  const [paymentForm, setPaymentForm] = useState({
+    prestamoId: "",
+  });
+  const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const bootstrap = async () => {
+      const accessGranted = window.localStorage.getItem(LOCAL_ACCESS_KEY) === "true";
+      const { data } = await supabase.auth.getSession();
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (accessGranted && data.session) {
+        setAuthStatus("signed_in");
+        await loadData();
+        return;
+      }
+
+      if (accessGranted && !data.session) {
+        try {
+          await initializeSupabaseAccess();
+          if (!isMounted) {
+            return;
+          }
+
+          setAuthStatus("signed_in");
+          await loadData();
+          return;
+        } catch (error) {
+          if (!isMounted) {
+            return;
+          }
+
+          setAuthMessage(getErrorMessage(error));
+        }
+      }
+
+      setAuthStatus("signed_out");
+    };
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!isMounted) {
+        return;
+      }
+
+      if (event === "SIGNED_OUT") {
+        setAuthStatus("signed_out");
+      }
+
+      if (session && window.localStorage.getItem(LOCAL_ACCESS_KEY) === "true") {
+        setAuthStatus("signed_in");
+      }
+    });
+
+    bootstrap();
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  async function initializeSupabaseAccess() {
+    const { data } = await supabase.auth.getSession();
+
+    if (data.session) {
+      return data.session;
+    }
+
+    if (SUPABASE_LOGIN_EMAIL) {
+      const { data: loginData, error } = await supabase.auth.signInWithPassword({
+        email: SUPABASE_LOGIN_EMAIL,
+        password: APP_PASSWORD,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      return loginData.session;
+    }
+
+    // If no Supabase auth email is configured, we continue with the public
+    // client and rely on the local app access gate. This avoids requiring
+    // anonymous auth in projects where it is disabled.
+    return null;
+  }
+
+  async function loadData() {
+    setScreenMessage("");
+
+    const [clientesResponse, prestamosResponse, pagosResponse] = await Promise.all([
+      selectTableData("clientes"),
+      selectTableData("prestamos"),
+      selectTableData("pagos"),
+    ]);
+
+    if (clientesResponse.error) {
+      throw clientesResponse.error;
+    }
+
+    if (prestamosResponse.error) {
+      throw prestamosResponse.error;
+    }
+
+    if (pagosResponse.error) {
+      throw pagosResponse.error;
+    }
+
+    const pagosMapped = (pagosResponse.data ?? []).map((row) => mapPago(row));
+    const prestamosMapped = (prestamosResponse.data ?? []).map((row) => {
+      const prestamo = mapPrestamo(row);
+      const pagosPrestamo = pagosMapped.filter((pago) => pago.prestamoId === prestamo.id);
+      const totalPagado = roundCurrency(
+        pagosPrestamo.reduce((sum, pago) => sum + pago.monto, 0),
+      );
+      const saldoRestante = roundCurrency(Math.max(prestamo.totalCobrar - totalPagado, 0));
+
+      return {
+        ...prestamo,
+        cuotasPagadas: pagosPrestamo.length,
+        saldoRestante,
+        estado: saldoRestante <= 0 ? "pagado" : prestamo.estado,
+      };
+    });
+
+    setClientes((clientesResponse.data ?? []).map((row) => mapCliente(row)));
+    setPrestamos(prestamosMapped);
+    setPagos(pagosMapped);
+  }
+
+  async function refreshData() {
+    startTransition(() => {
+      loadData().catch((error) => {
+        setScreenMessage(getErrorMessage(error));
+      });
+    });
+  }
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthMessage("");
+
+    if (
+      loginForm.usuario.trim().toLowerCase() !== APP_USERNAME.toLowerCase() ||
+      loginForm.clave !== APP_PASSWORD
+    ) {
+      setAuthMessage("Usuario o clave incorrectos.");
+      return;
+    }
+
+    try {
+      await initializeSupabaseAccess();
+      window.localStorage.setItem(LOCAL_ACCESS_KEY, "true");
+      setAuthStatus("signed_in");
+      await loadData();
+    } catch (error) {
+      setAuthMessage(getErrorMessage(error));
+    }
+  }
+
+  async function handleLogout() {
+    window.localStorage.removeItem(LOCAL_ACCESS_KEY);
+    await supabase.auth.signOut();
+    setClientes([]);
+    setPrestamos([]);
+    setPagos([]);
+    setAuthStatus("signed_out");
+    setScreenMessage("");
+  }
+
+  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPhotoPreview(String(reader.result ?? ""));
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function handleCreateClient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setScreenMessage("");
+
+    try {
+      const basePayload = {
+        nombre: clientForm.nombre.trim(),
+        direccion: clientForm.direccion.trim(),
+        telefono: clientForm.telefono.trim(),
+      };
+      const correo = clientForm.correo.trim();
+      const foto = photoPreview.trim();
+      const payloads: Record<string, unknown>[] = [
+        { ...basePayload, correo, foto_url: foto },
+        { ...basePayload, email: correo, foto_url: foto },
+        { ...basePayload, correo, foto },
+        { ...basePayload, email: correo, foto },
+        { ...basePayload, correo },
+        { ...basePayload, email: correo },
+        basePayload,
+      ].map((payload) =>
+        Object.fromEntries(
+          Object.entries(payload).filter(([, value]) => value !== ""),
+        ),
+      );
+
+      let lastError: Error | null = null;
+
+      for (const payload of payloads) {
+        const { error } = await supabase.from("clientes").insert(payload);
+
+        if (!error) {
+          lastError = null;
+          break;
+        }
+
+        lastError = error;
+
+        if (!isSchemaColumnError(error.message)) {
+          throw error;
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+
+      setClientForm({
+        nombre: "",
+        direccion: "",
+        telefono: "",
+        correo: "",
+      });
+      setPhotoPreview("");
+      await loadData();
+      setActiveTab("clientes");
+      setScreenMessage("Cliente registrado correctamente.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
+  }
+
+  async function handleCreateLoan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setScreenMessage("");
+
+    try {
+      const capital = Number(loanForm.montoCapital);
+      const numeroCuotas = Number(loanForm.numeroCuotas);
+      const porcentajeInteres = Number(loanForm.porcentajeInteres);
+
+      if (!loanForm.clienteId || capital <= 0 || numeroCuotas <= 0 || porcentajeInteres < 0) {
+        throw new Error(
+          "Debes seleccionar un cliente y completar capital, cuotas y porcentaje valido.",
+        );
+      }
+
+      const calculation = calculateLoanValues(capital, numeroCuotas, porcentajeInteres);
+      const payload = {
+        cliente_id: loanForm.clienteId,
+        monto_prestado: calculation.capital,
+        numero_cuotas: calculation.installmentCount,
+        estado: "activo",
+      };
+
+      const { error } = await supabase.from("prestamos").insert(payload);
+
+      if (error) {
+        throw error;
+      }
+
+      setLoanForm({
+        clienteId: "",
+        montoCapital: "",
+        numeroCuotas: "",
+        porcentajeInteres: "20",
+      });
+      await loadData();
+      setScreenMessage("Prestamo creado con el porcentaje calculado automaticamente.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
+  }
+
+  function handleSaveInitialCapital() {
+    const normalizedValue = String(Math.max(Number(initialCapitalInput || 0), 0));
+    setInitialCapitalInput(normalizedValue);
+    window.localStorage.setItem(INITIAL_CAPITAL_KEY, normalizedValue);
+    setScreenMessage("Monto inicial actualizado correctamente.");
+  }
+
+  async function handleRegisterPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setScreenMessage("");
+
+    try {
+      const prestamo = prestamos.find((item) => item.id === paymentForm.prestamoId);
+
+      if (!prestamo) {
+        throw new Error("Selecciona un prestamo para registrar el pago.");
+      }
+
+      if (prestamo.saldoRestante <= 0) {
+        throw new Error("Este prestamo ya fue cancelado por completo.");
+      }
+
+      const cliente = clientes.find((item) => item.id === prestamo.clienteId);
+
+      if (!cliente) {
+        throw new Error("No se encontro el cliente asociado al prestamo.");
+      }
+
+      const cuotaNumero = prestamo.cuotasPagadas + 1;
+      const montoPago = Math.min(prestamo.valorCuota, prestamo.saldoRestante);
+      const nuevoSaldo = roundCurrency(prestamo.saldoRestante - montoPago);
+      const nuevoEstado = nuevoSaldo <= 0 ? "pagado" : "activo";
+
+      const { data: pagoData, error: pagoError } = await supabase
+        .from("pagos")
+        .insert({
+          prestamo_id: prestamo.id,
+          monto_pagado: montoPago,
+          cuota_numero: cuotaNumero,
+        })
+        .select("*")
+        .single();
+
+      if (pagoError) {
+        throw pagoError;
+      }
+
+      const { error: updateError } = await supabase
+        .from("prestamos")
+        .update({
+          estado: nuevoEstado,
+        })
+        .eq("id", prestamo.id);
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      const pago = mapPago(pagoData);
+      const prestamoActualizado: Prestamo = {
+        ...prestamo,
+        saldoRestante: nuevoSaldo,
+        cuotasPagadas: cuotaNumero,
+        estado: nuevoEstado,
+      };
+
+      setPaymentForm({ prestamoId: "" });
+      await loadData();
+      setReceiptData({
+        cliente,
+        prestamo: prestamoActualizado,
+        pago,
+      });
+      setScreenMessage("Pago registrado y recibo listo para imprimir.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
+  }
+
+  async function handleDeleteClient(cliente: Cliente) {
+    const confirmed = window.confirm(
+      `Vas a borrar a ${cliente.nombre}. Esta accion no se puede deshacer.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setScreenMessage("");
+
+    try {
+      const prestamosCliente = prestamos.filter((prestamo) => prestamo.clienteId === cliente.id);
+
+      for (const prestamo of prestamosCliente) {
+        const pagosPrestamo = pagos.filter((pago) => pago.prestamoId === prestamo.id);
+
+        if (pagosPrestamo.length > 0) {
+          const pagosIds = pagosPrestamo.map((pago) => pago.id);
+          const { error: pagosDeleteError } = await supabase
+            .from("pagos")
+            .delete()
+            .in("id", pagosIds);
+
+          if (pagosDeleteError) {
+            throw pagosDeleteError;
+          }
+        }
+
+        const { error: prestamoDeleteError } = await supabase
+          .from("prestamos")
+          .delete()
+          .eq("id", prestamo.id);
+
+        if (prestamoDeleteError) {
+          throw prestamoDeleteError;
+        }
+      }
+
+      const { error } = await supabase.from("clientes").delete().eq("id", cliente.id);
+
+      if (error) {
+        throw error;
+      }
+
+      await loadData();
+      setScreenMessage(`Cliente ${cliente.nombre} eliminado correctamente.`);
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
+  }
+
+  function openLoanEditor(prestamo: Prestamo) {
+    setLoanEditForm({
+      prestamoId: prestamo.id,
+      clienteId: prestamo.clienteId,
+      montoCapital: String(prestamo.montoCapital),
+      numeroCuotas: String(prestamo.numeroCuotas),
+      estado: prestamo.estado,
+    });
+  }
+
+  async function handleUpdateLoan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!loanEditForm) {
+      return;
+    }
+
+    setScreenMessage("");
+
+    try {
+      const montoPrestado = Number(loanEditForm.montoCapital);
+      const numeroCuotas = Number(loanEditForm.numeroCuotas);
+
+      if (!loanEditForm.clienteId || montoPrestado <= 0 || numeroCuotas <= 0) {
+        throw new Error("Debes completar cliente, monto y cuotas validas.");
+      }
+
+      const { error } = await supabase
+        .from("prestamos")
+        .update({
+          cliente_id: loanEditForm.clienteId,
+          monto_prestado: montoPrestado,
+          numero_cuotas: numeroCuotas,
+          estado: loanEditForm.estado || "activo",
+        })
+        .eq("id", loanEditForm.prestamoId);
+
+      if (error) {
+        throw error;
+      }
+
+      await loadData();
+      setLoanEditForm(null);
+      setScreenMessage("Prestamo actualizado correctamente.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
+  }
+
+  async function handleDeleteLoan(prestamo: Prestamo) {
+    const confirmed = window.confirm(
+      "Vas a borrar este prestamo y sus pagos relacionados. Esta accion no se puede deshacer.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setScreenMessage("");
+
+    try {
+      const pagosPrestamo = pagos.filter((pago) => pago.prestamoId === prestamo.id);
+
+      if (pagosPrestamo.length > 0) {
+        const pagosIds = pagosPrestamo.map((pago) => pago.id);
+        const { error: pagosDeleteError } = await supabase.from("pagos").delete().in("id", pagosIds);
+
+        if (pagosDeleteError) {
+          throw pagosDeleteError;
+        }
+      }
+
+      const { error } = await supabase.from("prestamos").delete().eq("id", prestamo.id);
+
+      if (error) {
+        throw error;
+      }
+
+      await loadData();
+      setScreenMessage("Prestamo eliminado correctamente.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
+  }
+
+  function handlePrintReceipt() {
+    window.print();
+  }
+
+  const capitalPrestado = prestamos.reduce((sum, prestamo) => sum + prestamo.montoCapital, 0);
+  const gananciaNeta = prestamos.reduce(
+    (sum, prestamo) => sum + (prestamo.totalCobrar - prestamo.montoCapital),
+    0,
+  );
+  const totalRecaudado = pagos.reduce((sum, pago) => sum + pago.monto, 0);
+  const initialCapital = Math.max(Number(initialCapitalInput || 0), 0);
+  const capitalDisponible = Math.max(initialCapital - capitalPrestado + totalRecaudado, 0);
+
+  if (authStatus === "loading") {
+    return (
+      <main className="min-h-screen px-4 py-10">
+        <div className="mx-auto flex max-w-md flex-col gap-4 rounded-[28px] border border-white/50 bg-white/80 p-8 text-center shadow-2xl backdrop-blur">
+          <div className="mx-auto overflow-hidden rounded-[22px] border border-white/60 bg-white p-2 shadow-lg">
+            <Image src="/creditos-cb-logo.png" alt={BRAND_NAME} width={96} height={96} priority />
+          </div>
+          <h1 className="text-2xl font-black text-slate-900">{BRAND_NAME}</h1>
+          <p className="text-sm text-slate-600">
+            Preparando la sesion persistente y sincronizando datos...
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (authStatus === "signed_out") {
+    return (
+      <main className="min-h-screen px-4 py-8">
+        <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="brand-hero hidden rounded-[36px] border border-white/60 p-10 text-white shadow-2xl lg:block">
+            <p className="mb-3 inline-flex rounded-full bg-white/14 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em]">
+              Mobile First
+            </p>
+            <h1 className="section-title text-5xl font-black leading-[0.95]">
+              Creditos CB pensado para cobrar rapido y verse potente.
+            </h1>
+            <div className="mt-6 overflow-hidden rounded-[28px] border border-white/30 bg-white/10 p-3 backdrop-blur">
+              <Image
+                src="/creditos-cb-logo.png"
+                alt={BRAND_NAME}
+                width={720}
+                height={405}
+                priority
+                className="h-auto w-full rounded-[20px] object-cover"
+              />
+            </div>
+            <p className="mt-6 max-w-xl text-lg text-white/90">
+              Registra clientes con foto, define tu propio porcentaje de interes, lleva el
+              saldo restante y genera recibos listos para imprimir desde el celular o el
+              computador.
+            </p>
+            <div className="mt-8 grid gap-4 sm:grid-cols-3">
+              {[
+                "Sesion persistente hasta cerrar manualmente",
+                "Recibos tipo ticket con saldo pendiente",
+                "Panel amplio en desktop y botones grandes en movil",
+              ].map((item) => (
+                <div
+                  key={item}
+                  className="rounded-3xl border border-white/12 bg-white/8 p-4 text-sm leading-6"
+                >
+                  {item}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <form
+            onSubmit={handleLogin}
+            className="glass-panel mx-auto flex w-full max-w-md flex-col gap-5 rounded-[32px] p-6 sm:p-8"
+          >
+            <div>
+              <div className="mb-4 flex items-center gap-3">
+                <div className="overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm">
+                  <Image src="/creditos-cb-logo.png" alt={BRAND_NAME} width={74} height={74} priority />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.28em] text-green-700">
+                    {BRAND_NAME}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.22em] text-sky-700">
+                    Panel de acceso
+                  </p>
+                </div>
+              </div>
+              <h2 className="section-title text-3xl font-black text-slate-900">
+                Ingreso seguro
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                La sesion quedara abierta de forma permanente en este dispositivo hasta que
+                presiones <strong>Cerrar Sesion</strong>.
+              </p>
+            </div>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-semibold text-slate-700">Usuario</span>
+              <input
+                value={loginForm.usuario}
+                onChange={(event) =>
+                  setLoginForm((current) => ({ ...current, usuario: event.target.value }))
+                }
+                className="h-14 rounded-2xl border border-slate-200 bg-white px-4 outline-none ring-0 transition focus:border-green-500"
+                placeholder="CamiloBM"
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-semibold text-slate-700">Clave</span>
+              <input
+                type="password"
+                value={loginForm.clave}
+                onChange={(event) =>
+                  setLoginForm((current) => ({ ...current, clave: event.target.value }))
+                }
+                className="h-14 rounded-2xl border border-slate-200 bg-white px-4 outline-none ring-0 transition focus:border-green-500"
+                placeholder="********"
+              />
+            </label>
+
+            {authMessage ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {authMessage}
+              </div>
+            ) : null}
+
+            <button
+              type="submit"
+              className="brand-button h-14 rounded-2xl text-base font-bold transition"
+            >
+              Entrar a la aplicacion
+            </button>
+
+            <div className="rounded-2xl bg-yellow-50 px-4 py-3 text-xs leading-5 text-yellow-900">
+              Si luego deseas autenticar contra un usuario real de Supabase, completa
+              <code> NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL </code>. Mientras tanto, la app
+              usa tu acceso local y el cliente publico de Supabase.
+            </div>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-6">
+      <div className="mx-auto flex max-w-7xl flex-col gap-4">
+        {loanEditForm ? (
+          <section className="glass-panel rounded-[30px] border-2 border-sky-200 p-4 sm:p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-sky-700">
+                  Prestamos
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Editar prestamo
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLoanEditForm(null)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 transition"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateLoan} className="grid gap-3 md:grid-cols-2">
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Cliente</span>
+                <select
+                  value={loanEditForm.clienteId}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current ? { ...current, clienteId: event.target.value } : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                >
+                  {clientes.map((cliente) => (
+                    <option key={cliente.id} value={cliente.id}>
+                      {cliente.nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Estado</span>
+                <select
+                  value={loanEditForm.estado}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current ? { ...current, estado: event.target.value } : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                >
+                  <option value="activo">Activo</option>
+                  <option value="pagado">Pagado</option>
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Monto prestado</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={loanEditForm.montoCapital}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current ? { ...current, montoCapital: event.target.value } : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Numero de cuotas</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={loanEditForm.numeroCuotas}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current ? { ...current, numeroCuotas: event.target.value } : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <div className="md:col-span-2 flex flex-wrap gap-3">
+                <button
+                  type="submit"
+                  className="brand-button rounded-2xl px-5 py-3 text-sm font-bold transition"
+                >
+                  Guardar cambios
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLoanEditForm(null)}
+                  className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 transition"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </section>
+        ) : null}
+
+        {receiptData ? (
+          <section className="glass-panel rounded-[30px] border-2 border-green-200 p-4 sm:p-5 print:border-none print:bg-white print:shadow-none">
+            <div className="mb-4 flex items-center justify-between gap-3 print:hidden">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Recibo
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Ticket listo para imprimir
+                </h2>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintReceipt}
+                  className="brand-button rounded-2xl px-4 py-3 text-sm font-bold transition"
+                >
+                  Imprimir recibo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReceiptData(null)}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 transition"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+
+            <div className="mx-auto max-w-sm rounded-[28px] border border-dashed border-slate-300 bg-white p-5 shadow-sm print:max-w-full print:border-none print:shadow-none">
+              <div className="border-b border-dashed border-slate-300 pb-4 text-center">
+                <div className="mx-auto mb-3 overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm print:shadow-none">
+                  <Image
+                    src="/creditos-cb-logo.png"
+                    alt={BRAND_NAME}
+                    width={84}
+                    height={84}
+                    priority
+                    className="mx-auto"
+                  />
+                </div>
+                <h3 className="text-xl font-black text-slate-900">{BRAND_NAME}</h3>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Recibo de pago</p>
+              </div>
+
+              <div className="py-4 text-center">
+                {receiptData.cliente.fotoUrl ? (
+                  <Image
+                    src={receiptData.cliente.fotoUrl}
+                    alt={receiptData.cliente.nombre}
+                    width={92}
+                    height={92}
+                    unoptimized
+                    className="mx-auto h-[92px] w-[92px] rounded-full border-4 border-green-100 object-cover"
+                  />
+                ) : null}
+                <p className="mt-3 text-xl font-black text-slate-900">
+                  {receiptData.cliente.nombre}
+                </p>
+              </div>
+
+              <div className="grid gap-2 text-sm text-slate-700">
+                <div className="flex items-center justify-between gap-3">
+                  <span>Fecha</span>
+                  <strong>{formatDate(receiptData.pago.createdAt)}</strong>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Cuota</span>
+                  <strong>
+                    #{receiptData.pago.cuotaNumero} de {receiptData.prestamo.numeroCuotas}
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Capital</span>
+                  <strong>{formatCurrency(receiptData.prestamo.montoCapital)}</strong>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Interes</span>
+                  <strong>{receiptData.prestamo.porcentajeInteres}%</strong>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Total a cobrar</span>
+                  <strong>{formatCurrency(receiptData.prestamo.totalCobrar)}</strong>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-[20px] border border-green-200 bg-green-50 p-4 text-center">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-green-700">
+                  Valor del pago
+                </p>
+                <p className="mt-2 text-3xl font-black text-green-900">
+                  {formatCurrency(receiptData.pago.monto)}
+                </p>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3 rounded-[18px] bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
+                <span>Saldo restante</span>
+                <strong>
+                  {formatCurrency(Math.max(receiptData.prestamo.saldoRestante, 0))}
+                </strong>
+              </div>
+
+              <p className="mt-4 border-t border-dashed border-slate-300 pt-4 text-center text-xs text-slate-500">
+                Gracias por su pago. Conserve este recibo como soporte.
+              </p>
+            </div>
+          </section>
+        ) : null}
+
+        <header className="glass-panel rounded-[28px] p-4 sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="mb-2 flex items-center gap-3">
+                <div className="overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm">
+                  <Image src="/creditos-cb-logo.png" alt={BRAND_NAME} width={76} height={76} priority />
+                </div>
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.3em] text-green-700">
+                    {BRAND_NAME}
+                  </p>
+                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.22em] text-sky-700">
+                    Gestion de prestamos
+                  </p>
+                </div>
+              </div>
+              <h1 className="section-title mt-2 text-3xl font-black text-slate-900 sm:text-4xl">
+                Control total de cobros, clientes y recibos
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
+                El sistema calcula automaticamente el porcentaje que definas, divide las
+                cuotas, mantiene el saldo restante y deja la sesion abierta hasta cerrar
+                manualmente.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("panel")}
+                  className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                    activeTab === "panel"
+                      ? "brand-button text-white"
+                      : "border border-slate-200 bg-white text-slate-700"
+                  }`}
+                >
+                  Panel principal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("clientes")}
+                  className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                    activeTab === "clientes"
+                      ? "brand-button text-white"
+                      : "border border-slate-200 bg-white text-slate-700"
+                  }`}
+                >
+                  Listado de clientes
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={refreshData}
+                className="h-12 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 transition hover:border-green-300 hover:text-green-700"
+              >
+                {isPending ? "Actualizando..." : "Actualizar datos"}
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="brand-button-dark h-12 rounded-2xl px-5 text-sm font-bold transition"
+              >
+                Cerrar Sesion
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {activeTab === "panel" ? <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            {
+              label: "Monto Inicial",
+              value: formatCurrency(initialCapital),
+              accent: "from-slate-900 via-slate-800 to-slate-700",
+            },
+            {
+              label: "Capital Prestado",
+              value: formatCurrency(capitalPrestado),
+              accent: "from-green-700 via-green-600 to-lime-500",
+            },
+            {
+              label: "Ganancia Neta",
+              value: formatCurrency(gananciaNeta),
+              accent: "from-yellow-300 via-yellow-400 to-amber-500",
+            },
+            {
+              label: "Total Recaudado",
+              value: formatCurrency(totalRecaudado),
+              accent: "from-sky-700 via-blue-600 to-cyan-500",
+            },
+            {
+              label: "Disponible para prestar",
+              value: formatCurrency(capitalDisponible),
+              accent: "from-fuchsia-700 via-violet-600 to-purple-500",
+            },
+          ].map((card) => (
+            <article
+              key={card.label}
+              className={`rounded-[28px] bg-gradient-to-br ${card.accent} p-5 text-white shadow-xl`}
+            >
+              <p className="text-sm uppercase tracking-[0.24em] text-white/80">{card.label}</p>
+              <p className="mt-4 text-3xl font-black sm:text-4xl">{card.value}</p>
+            </article>
+          ))}
+        </section> : null}
+
+        {screenMessage ? (
+          <div className="glass-panel rounded-[24px] border-l-4 border-l-teal-600 px-4 py-3 text-sm text-slate-700">
+            {screenMessage}
+          </div>
+        ) : null}
+
+        {activeTab === "panel" ? <section className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+          <div className="flex flex-col gap-4">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Fondo base
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Monto inicial para prestamos
+                  </h2>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Monto inicial</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={initialCapitalInput}
+                    onChange={(event) => setInitialCapitalInput(event.target.value)}
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder="1000000"
+                  />
+                </label>
+
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={handleSaveInitialCapital}
+                    className="brand-button h-13 rounded-2xl px-5 text-sm font-bold transition"
+                  >
+                    Guardar monto
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-[24px] bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                Este valor se guarda en este dispositivo y el disponible se calcula como:
+                monto inicial - capital prestado + total recaudado.
+              </div>
+            </article>
+
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Clientes
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Registro con foto
+                  </h2>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                  {clientes.length} registrados
+                </span>
+              </div>
+
+              <form onSubmit={handleCreateClient} className="grid gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Nombre</span>
+                    <input
+                      value={clientForm.nombre}
+                      onChange={(event) =>
+                        setClientForm((current) => ({ ...current, nombre: event.target.value }))
+                      }
+                      required
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="Nombre completo"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Telefono</span>
+                    <input
+                      value={clientForm.telefono}
+                      onChange={(event) =>
+                        setClientForm((current) => ({ ...current, telefono: event.target.value }))
+                      }
+                      required
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="3001234567"
+                    />
+                  </label>
+                </div>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Direccion</span>
+                  <input
+                    value={clientForm.direccion}
+                    onChange={(event) =>
+                      setClientForm((current) => ({ ...current, direccion: event.target.value }))
+                    }
+                    required
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder="Barrio, calle o referencia"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Correo</span>
+                  <input
+                    type="email"
+                    value={clientForm.correo}
+                    onChange={(event) =>
+                      setClientForm((current) => ({ ...current, correo: event.target.value }))
+                    }
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder="cliente@correo.com"
+                  />
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">
+                      Foto del cliente
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handlePhotoChange}
+                      className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-600"
+                    />
+                  </label>
+
+                  <div className="flex items-center justify-center">
+                    <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-[24px] border border-slate-200 bg-slate-100">
+                      {photoPreview ? (
+                        <Image
+                          src={photoPreview}
+                          alt="Vista previa del cliente"
+                          width={96}
+                          height={96}
+                          unoptimized
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <span className="px-2 text-center text-xs font-semibold text-slate-500">
+                          Sin foto
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="brand-button mt-1 h-13 rounded-2xl px-5 text-sm font-bold transition"
+                >
+                  Guardar cliente
+                </button>
+              </form>
+            </article>
+
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Prestamos
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Alta automatica del prestamo
+                </h2>
+              </div>
+
+              <form onSubmit={handleCreateLoan} className="grid gap-3">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Cliente</span>
+                  <select
+                    value={loanForm.clienteId}
+                    onChange={(event) =>
+                      setLoanForm((current) => ({ ...current, clienteId: event.target.value }))
+                    }
+                    required
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                  >
+                    <option value="">Selecciona un cliente</option>
+                    {clientes.map((cliente) => (
+                      <option key={cliente.id} value={cliente.id}>
+                        {cliente.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Monto Capital</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={loanForm.montoCapital}
+                      onChange={(event) =>
+                        setLoanForm((current) => ({
+                          ...current,
+                          montoCapital: event.target.value,
+                        }))
+                      }
+                      required
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="500000"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Numero de Cuotas</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={loanForm.numeroCuotas}
+                      onChange={(event) =>
+                        setLoanForm((current) => ({
+                          ...current,
+                          numeroCuotas: event.target.value,
+                        }))
+                      }
+                      required
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="10"
+                    />
+                  </label>
+                </div>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">
+                    Porcentaje de interes
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={loanForm.porcentajeInteres}
+                    onChange={(event) =>
+                      setLoanForm((current) => ({
+                        ...current,
+                        porcentajeInteres: event.target.value,
+                      }))
+                    }
+                    required
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder="20"
+                  />
+                </label>
+
+                {Number(loanForm.montoCapital) > 0 &&
+                Number(loanForm.numeroCuotas) > 0 &&
+                Number(loanForm.porcentajeInteres) >= 0 ? (
+                  <div className="rounded-[24px] bg-gradient-to-br from-green-700 via-green-600 to-sky-700 p-4 text-white">
+                    {(() => {
+                      const preview = calculateLoanValues(
+                        Number(loanForm.montoCapital),
+                        Number(loanForm.numeroCuotas),
+                        Number(loanForm.porcentajeInteres),
+                      );
+
+                      return (
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                              Interes
+                            </p>
+                            <p className="mt-2 text-2xl font-black">
+                              {preview.interestRatePercent}%
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                              Total a cobrar
+                            </p>
+                            <p className="mt-2 text-2xl font-black">
+                              {formatCurrency(preview.totalToCollect)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                              Valor cuota
+                            </p>
+                            <p className="mt-2 text-2xl font-black">
+                              {formatCurrency(preview.installmentValue)}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ) : null}
+
+                <button
+                  type="submit"
+                  className="brand-button-secondary h-13 rounded-2xl px-5 text-sm font-bold transition"
+                >
+                  Crear prestamo
+                </button>
+              </form>
+            </article>
+
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Pagos
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Registrar cuota y emitir recibo
+                </h2>
+              </div>
+
+              <form onSubmit={handleRegisterPayment} className="grid gap-3">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">
+                    Prestamo a cobrar
+                  </span>
+                  <select
+                    value={paymentForm.prestamoId}
+                    onChange={(event) =>
+                      setPaymentForm({ prestamoId: event.target.value })
+                    }
+                    required
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                  >
+                    <option value="">Selecciona un prestamo activo</option>
+                    {prestamos
+                      .filter((prestamo) => prestamo.saldoRestante > 0)
+                      .map((prestamo) => {
+                        const cliente =
+                          clientes.find((item) => item.id === prestamo.clienteId)?.nombre ??
+                          "Cliente";
+
+                        return (
+                          <option key={prestamo.id} value={prestamo.id}>
+                            {cliente} - {formatCurrency(prestamo.valorCuota)} - saldo{" "}
+                            {formatCurrency(prestamo.saldoRestante)}
+                          </option>
+                        );
+                      })}
+                  </select>
+                </label>
+
+                <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/70 p-4 text-sm leading-6 text-slate-600">
+                  El sistema registra una cuota completa por clic y genera el ticket imprimible
+                  con fecha, foto, valor del pago, cuota y saldo restante.
+                </div>
+
+                <button type="submit" className="brand-button-dark h-13 rounded-2xl px-5 text-sm font-bold transition">
+                  Registrar pago y abrir recibo
+                </button>
+              </form>
+            </article>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Clientes
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Agenda visual
+                  </h2>
+                </div>
+              </div>
+
+              <div className="hide-scrollbar flex gap-3 overflow-x-auto pb-1 lg:grid lg:max-h-[360px] lg:grid-cols-1 lg:overflow-y-auto">
+                {clientes.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                    Aun no hay clientes registrados.
+                  </div>
+                ) : null}
+
+                {clientes.map((cliente) => (
+                  <article
+                    key={cliente.id}
+                    className="min-w-[260px] rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100">
+                        {cliente.fotoUrl ? (
+                          <Image
+                            src={cliente.fotoUrl}
+                            alt={cliente.nombre}
+                            width={64}
+                            height={64}
+                            unoptimized
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-xs font-bold text-slate-500">
+                            Sin foto
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-lg font-black text-slate-900">
+                          {cliente.nombre}
+                        </h3>
+                        <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
+                        <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
+                      </div>
+                    </div>
+                    <p className="mt-4 text-sm leading-6 text-slate-600">{cliente.direccion}</p>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteClient(cliente)}
+                      className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
+                    >
+                      Borrar cliente
+                    </button>
+                    <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                      Creado: {formatShortDate(cliente.createdAt)}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </article>
+
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Prestamos
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Vista de cobranza
+                  </h2>
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:hidden">
+                {prestamos.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                    Aun no hay prestamos registrados.
+                  </div>
+                ) : null}
+
+                {prestamos.map((prestamo) => {
+                  const cliente =
+                    clientes.find((item) => item.id === prestamo.clienteId)?.nombre ?? "Cliente";
+
+                  return (
+                    <article
+                      key={prestamo.id}
+                      className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-black text-slate-900">{cliente}</h3>
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                            {getLoanStatusLabel(prestamo)}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                          {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
+                        </span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                            Capital
+                          </p>
+                          <p className="mt-2 font-bold">{formatCurrency(prestamo.montoCapital)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                            Interes
+                          </p>
+                          <p className="mt-2 font-bold">{prestamo.porcentajeInteres}%</p>
+                        </div>
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                            Cuota
+                          </p>
+                          <p className="mt-2 font-bold">{formatCurrency(prestamo.valorCuota)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                            Total
+                          </p>
+                          <p className="mt-2 font-bold">{formatCurrency(prestamo.totalCobrar)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-yellow-50 p-3">
+                          <p className="text-xs uppercase tracking-[0.2em] text-yellow-700">
+                            Saldo
+                          </p>
+                          <p className="mt-2 font-bold text-yellow-900">
+                            {formatCurrency(prestamo.saldoRestante)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openLoanEditor(prestamo)}
+                          className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-bold text-sky-700 transition hover:bg-sky-100"
+                        >
+                          Editar prestamo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteLoan(prestamo)}
+                          className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
+                        >
+                          Borrar prestamo
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <div className="hidden overflow-hidden rounded-[24px] border border-slate-200 lg:block">
+                <table className="min-w-full bg-white/80">
+                  <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
+                    <tr>
+                      <th className="px-4 py-3">Cliente</th>
+                      <th className="px-4 py-3">Capital</th>
+                      <th className="px-4 py-3">Interes</th>
+                      <th className="px-4 py-3">Total</th>
+                      <th className="px-4 py-3">Cuota</th>
+                      <th className="px-4 py-3">Cuotas</th>
+                      <th className="px-4 py-3">Saldo</th>
+                      <th className="px-4 py-3">Estado</th>
+                      <th className="px-4 py-3">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {prestamos.map((prestamo) => {
+                      const cliente =
+                        clientes.find((item) => item.id === prestamo.clienteId)?.nombre ??
+                        "Cliente";
+
+                      return (
+                        <tr key={prestamo.id} className="border-t border-slate-100 text-sm">
+                          <td className="px-4 py-3 font-semibold text-slate-800">{cliente}</td>
+                          <td className="px-4 py-3">{formatCurrency(prestamo.montoCapital)}</td>
+                          <td className="px-4 py-3">{prestamo.porcentajeInteres}%</td>
+                          <td className="px-4 py-3">{formatCurrency(prestamo.totalCobrar)}</td>
+                          <td className="px-4 py-3">{formatCurrency(prestamo.valorCuota)}</td>
+                          <td className="px-4 py-3">
+                            {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-yellow-800">
+                            {formatCurrency(prestamo.saldoRestante)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                              {getLoanStatusLabel(prestamo)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openLoanEditor(prestamo)}
+                                className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteLoan(prestamo)}
+                                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
+                              >
+                                Borrar
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Historial
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Ultimos pagos
+                  </h2>
+                </div>
+              </div>
+
+              <div className="grid gap-3">
+                {pagos.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                    Todavia no se han registrado pagos.
+                  </div>
+                ) : null}
+
+                {pagos.slice(0, 8).map((pago) => {
+                  const prestamo = prestamos.find((item) => item.id === pago.prestamoId);
+                  const cliente =
+                    clientes.find((item) => item.id === pago.clienteId)?.nombre ?? "Cliente";
+
+                  return (
+                    <article
+                      key={pago.id}
+                      className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-black text-slate-900">{cliente}</h3>
+                          <p className="mt-1 text-sm text-slate-500">{formatDate(pago.createdAt)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-black text-green-700">
+                            {formatCurrency(pago.monto)}
+                          </p>
+                          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                            Cuota {pago.cuotaNumero}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                        Saldo restante:{" "}
+                        <strong className="text-slate-900">
+                          {formatCurrency(prestamo?.saldoRestante ?? 0)}
+                        </strong>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </article>
+          </div>
+        </section> : (
+          <section className="grid gap-4">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Clientes
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Listado completo
+                  </h2>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Aqui puedes ver todos los clientes registrados y la fecha exacta de creacion.
+                  </p>
+                </div>
+                <div className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm">
+                  {clientes.length} clientes
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:hidden">
+                {clientes.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                    Aun no hay clientes registrados.
+                  </div>
+                ) : null}
+
+                {clientes.map((cliente) => (
+                  <article
+                    key={cliente.id}
+                    className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100">
+                        {cliente.fotoUrl ? (
+                          <Image
+                            src={cliente.fotoUrl}
+                            alt={cliente.nombre}
+                            width={64}
+                            height={64}
+                            unoptimized
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-xs font-bold text-slate-500">
+                            Sin foto
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-lg font-black text-slate-900">
+                          {cliente.nombre}
+                        </h3>
+                        <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
+                        <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2 rounded-[22px] bg-slate-50 p-3 text-sm text-slate-600">
+                      <p>
+                        <strong className="text-slate-900">Direccion:</strong> {cliente.direccion}
+                      </p>
+                      <p>
+                        <strong className="text-slate-900">Creado:</strong> {formatDate(cliente.createdAt)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteClient(cliente)}
+                      className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
+                    >
+                      Borrar cliente
+                    </button>
+                  </article>
+                ))}
+              </div>
+
+              <div className="hidden overflow-hidden rounded-[24px] border border-slate-200 lg:block">
+                <table className="min-w-full bg-white/80">
+                  <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
+                    <tr>
+                      <th className="px-4 py-3">Cliente</th>
+                      <th className="px-4 py-3">Telefono</th>
+                      <th className="px-4 py-3">Correo</th>
+                      <th className="px-4 py-3">Direccion</th>
+                      <th className="px-4 py-3">Fecha de creacion</th>
+                      <th className="px-4 py-3">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clientes.map((cliente) => (
+                      <tr key={cliente.id} className="border-t border-slate-100 text-sm">
+                        <td className="px-4 py-3 font-semibold text-slate-800">{cliente.nombre}</td>
+                        <td className="px-4 py-3">{cliente.telefono}</td>
+                        <td className="px-4 py-3">{cliente.correo || "--"}</td>
+                        <td className="px-4 py-3">{cliente.direccion}</td>
+                        <td className="px-4 py-3">{formatDate(cliente.createdAt)}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteClient(cliente)}
+                            className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
+                          >
+                            Borrar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        )}
+      </div>
+    </main>
+  );
+}

@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+:root {
+  --background: #eef9e9;
+  --foreground: #12311e;
+  --surface: rgba(255, 255, 255, 0.82);
+  --surface-strong: rgba(248, 255, 241, 0.94);
+  --border: rgba(18, 49, 30, 0.09);
+  --primary: #0f7d2d;
+  --primary-strong: #0b5d21;
+  --accent: #f7df1e;
+  --danger: #b91c1c;
+  --muted: #426053;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Segoe UI", "Aptos", "Trebuchet MS", sans-serif;
+  --font-mono: "Consolas", "Courier New", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background:
+    radial-gradient(circle at top left, rgba(247, 223, 30, 0.26), transparent 26%),
+    radial-gradient(circle at right center, rgba(33, 150, 243, 0.18), transparent 30%),
+    radial-gradient(circle at bottom left, rgba(15, 125, 45, 0.17), transparent 24%),
+    linear-gradient(180deg, #f7fff2 0%, #edfbe6 46%, #e9f8ff 100%);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(33, 150, 243, 0.2);
+}
+
+.glass-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 22px 60px rgba(14, 84, 33, 0.12);
+}
+
+.section-title {
+  letter-spacing: -0.03em;
+}
+
+.ticket-font {
+  font-family: "Courier New", monospace;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.brand-chip {
+  background: linear-gradient(135deg, #0d7d2e, #0c5f97);
+  color: white;
+  box-shadow: 0 14px 34px rgba(12, 95, 151, 0.2);
+}
+
+.brand-button {
+  background: linear-gradient(135deg, #10852f, #0f6d28);
+  color: white;
+  box-shadow: 0 16px 32px rgba(15, 109, 40, 0.24);
+}
+
+.brand-button:hover {
+  background: linear-gradient(135deg, #0e7429, #0c5f22);
+}
+
+.brand-button-secondary {
+  background: linear-gradient(135deg, #f7df1e, #f9c80e);
+  color: #16341f;
+  box-shadow: 0 16px 32px rgba(247, 223, 30, 0.24);
+}
+
+.brand-button-dark {
+  background: linear-gradient(135deg, #0b5f97, #0a4472);
+  color: white;
+  box-shadow: 0 16px 32px rgba(10, 68, 114, 0.22);
+}
+
+.brand-hero {
+  background:
+    radial-gradient(circle at top left, rgba(247, 223, 30, 0.34), transparent 20%),
+    radial-gradient(circle at bottom right, rgba(0, 184, 255, 0.24), transparent 26%),
+    linear-gradient(135deg, rgba(16, 133, 47, 0.98), rgba(13, 95, 151, 0.96));
+}
