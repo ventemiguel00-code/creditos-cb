@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Manual del Sistema - Creditos CB</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --paper: #ffffff;
+      --ink: #13213a;
+      --muted: #58708f;
+      --line: #d8e2f1;
+      --green: #0c9b68;
+      --blue: #1487e3;
+      --gold: #f2a900;
+      --soft-green: #e9fbf4;
+      --soft-blue: #eef7ff;
+      --soft-gold: #fff6df;
+      --shadow: 0 18px 45px rgba(19, 33, 58, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(20, 135, 227, 0.12), transparent 28%),
+        radial-gradient(circle at top left, rgba(12, 155, 104, 0.12), transparent 24%),
+        var(--bg);
+      color: var(--ink);
+      line-height: 1.6;
+    }
+
+    .page {
+      width: min(1040px, calc(100% - 32px));
+      margin: 32px auto 48px;
+      background: var(--paper);
+      border: 1px solid rgba(216, 226, 241, 0.8);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero {
+      padding: 40px 40px 28px;
+      background:
+        linear-gradient(135deg, rgba(12, 155, 104, 0.96), rgba(20, 135, 227, 0.92)),
+        linear-gradient(180deg, #0c9b68, #1487e3);
+      color: #fff;
+      position: relative;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -120px -120px auto;
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      font-size: 12px;
+      letter-spacing: 0.34em;
+      text-transform: uppercase;
+      opacity: 0.85;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 3.25rem);
+      line-height: 1.08;
+      max-width: 760px;
+    }
+
+    .hero p {
+      margin: 14px 0 0;
+      max-width: 740px;
+      font-size: 1.05rem;
+      color: rgba(255, 255, 255, 0.92);
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      padding: 24px 40px 8px;
+      background: linear-gradient(180deg, rgba(12, 155, 104, 0.04), rgba(20, 135, 227, 0.02));
+    }
+
+    .meta-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px 18px;
+      background: rgba(255, 255, 255, 0.86);
+    }
+
+    .meta-card strong,
+    .section h2 {
+      color: var(--ink);
+    }
+
+    .meta-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-top: 6px;
+    }
+
+    .content {
+      padding: 12px 40px 40px;
+    }
+
+    .section {
+      padding: 24px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .section h2 {
+      margin: 0 0 14px;
+      font-size: 1.45rem;
+    }
+
+    .section p {
+      margin: 0 0 12px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .card {
+      border-radius: 20px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .card.green {
+      background: linear-gradient(180deg, var(--soft-green), #fff);
+    }
+
+    .card.blue {
+      background: linear-gradient(180deg, var(--soft-blue), #fff);
+    }
+
+    .card.gold {
+      background: linear-gradient(180deg, var(--soft-gold), #fff);
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
+
+    .card p,
+    li,
+    .note {
+      color: var(--muted);
+    }
+
+    ul,
+    ol {
+      margin: 12px 0 0;
+      padding-left: 20px;
+    }
+
+    li + li {
+      margin-top: 8px;
+    }
+
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      background: #eff4fb;
+      color: #10345f;
+      padding: 2px 7px;
+      border-radius: 8px;
+      font-size: 0.94em;
+    }
+
+    .callout {
+      margin-top: 16px;
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #f9fbff, #f2f7ff);
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .warning {
+      background: linear-gradient(180deg, #fff6e8, #fffdf7);
+      border-color: #f0d194;
+    }
+
+    .footer {
+      margin-top: 28px;
+      padding: 22px 24px;
+      border-radius: 22px;
+      background: linear-gradient(135deg, rgba(12, 155, 104, 0.08), rgba(20, 135, 227, 0.08));
+      border: 1px solid var(--line);
+    }
+
+    .footer p {
+      margin: 0;
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      .page {
+        width: 100%;
+        margin: 0;
+        box-shadow: none;
+        border: 0;
+        border-radius: 0;
+      }
+
+      .hero,
+      .meta,
+      .content {
+        padding-left: 24px;
+        padding-right: 24px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        width: calc(100% - 18px);
+        margin: 10px auto 24px;
+        border-radius: 20px;
+      }
+
+      .hero,
+      .meta,
+      .content {
+        padding-left: 18px;
+        padding-right: 18px;
+      }
+
+      .hero {
+        padding-top: 28px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Creditos CB</p>
+      <h1>Manual del sistema y guia practica de uso</h1>
+      <p>
+        Documento de apoyo para administrar clientes, prestamos, pagos, seguridad,
+        limpieza de historial y respaldo general de la aplicacion web.
+      </p>
+    </section>
+
+    <section class="meta">
+      <article class="meta-card">
+        <strong>Proyecto</strong>
+        <span>Creditos CB</span>
+      </article>
+      <article class="meta-card">
+        <strong>Tecnologia</strong>
+        <span>Next.js + Tailwind + Supabase + Vercel</span>
+      </article>
+      <article class="meta-card">
+        <strong>Uso principal</strong>
+        <span>Gestion de clientes, prestamos, pagos y reportes</span>
+      </article>
+      <article class="meta-card">
+        <strong>Modo de apertura</strong>
+        <span>Abrir este archivo en el navegador para leer o imprimir</span>
+      </article>
+    </section>
+
+    <section class="content">
+      <section class="section">
+        <h2>1. Ingreso a la aplicacion</h2>
+        <p>
+          La app usa un acceso privado para entrar al panel. La sesion permanece
+          abierta en el dispositivo hasta que cierres sesion manualmente.
+        </p>
+        <div class="grid">
+          <article class="card green">
+            <h3>Usuario actual</h3>
+            <p><code>CamiloBM</code></p>
+          </article>
+          <article class="card blue">
+            <h3>Clave actual</h3>
+            <p><code>12345678</code></p>
+          </article>
+          <article class="card gold">
+            <h3>Cambio de clave</h3>
+            <p>Disponible desde la pestaña <strong>Configuracion</strong>.</p>
+          </article>
+        </div>
+        <div class="callout warning">
+          <strong>Importante</strong>
+          Si cambias la clave desde la app, la nueva reemplaza la anterior. Guarda
+          la nueva clave en un lugar seguro.
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>2. Estructura por pestañas</h2>
+        <p>
+          Todo el sistema esta organizado en pestañas para que el acceso sea mas
+          comodo desde celular y computador.
+        </p>
+        <div class="grid">
+          <article class="card">
+            <h3>Resumen</h3>
+            <p>
+              Muestra el capital prestado, ganancia neta, total recaudado y capital
+              inicial disponible.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Clientes</h3>
+            <p>
+              Registro, listado, busqueda, foto, fecha de creacion y eliminacion de
+              clientes.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Prestamos</h3>
+            <p>
+              Creacion, edicion, eliminacion, porcentaje configurable y estado del
+              prestamo.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Pagos</h3>
+            <p>
+              Registro de pagos, recibo imprimible y actualizacion del saldo
+              restante.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Configuracion</h3>
+            <p>
+              Cambio de clave, limpieza del historial y descarga del archivo Excel.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>3. Registro de clientes</h2>
+        <p>
+          Desde la pestaña <strong>Clientes</strong> puedes crear nuevos clientes con
+          sus datos completos.
+        </p>
+        <ol>
+          <li>Ingresa el nombre del cliente.</li>
+          <li>Escribe direccion, telefono y correo si aplica.</li>
+          <li>Adjunta una foto desde camara o archivo.</li>
+          <li>Presiona el boton para guardar.</li>
+        </ol>
+        <div class="callout">
+          <strong>Dato importante</strong>
+          El sistema muestra la fecha con texto mas claro, por ejemplo:
+          <code>Creado 19/04/2026</code>.
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>4. Creacion de prestamos</h2>
+        <p>
+          Al crear un prestamo, el sistema calcula automaticamente el total a pagar
+          y el valor de cada cuota usando el porcentaje que definas.
+        </p>
+        <ol>
+          <li>Selecciona el cliente.</li>
+          <li>Ingresa el monto prestado.</li>
+          <li>Ingresa el numero de cuotas.</li>
+          <li>Define el porcentaje de interes.</li>
+          <li>Guarda el prestamo.</li>
+        </ol>
+        <div class="grid">
+          <article class="card green">
+            <h3>Total a pagar</h3>
+            <p>Lo calcula Supabase segun las columnas generadas de tu tabla.</p>
+          </article>
+          <article class="card blue">
+            <h3>Valor cuota</h3>
+            <p>Se toma automaticamente desde la base de datos.</p>
+          </article>
+          <article class="card gold">
+            <h3>Estado</h3>
+            <p>
+              Puede mostrarse como <strong>Al dia</strong> o
+              <strong>Pago de prestamo completado</strong>.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>5. Edicion y eliminacion</h2>
+        <p>
+          La app permite administrar tanto clientes como prestamos cuando sea
+          necesario.
+        </p>
+        <ul>
+          <li>Puedes editar un prestamo para corregir monto, cuotas o porcentaje.</li>
+          <li>Puedes borrar un prestamo desde su seccion correspondiente.</li>
+          <li>
+            Puedes borrar un cliente y el sistema elimina tambien la informacion
+            relacionada para evitar inconsistencias.
+          </li>
+        </ul>
+        <div class="callout warning">
+          <strong>Recomendacion</strong>
+          Antes de borrar informacion importante, descarga primero el Excel como
+          respaldo.
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>6. Registro de pagos y recibos</h2>
+        <p>
+          Cada pago puede generar un recibo listo para imprimir desde la misma app,
+          sin depender de ventanas emergentes del navegador.
+        </p>
+        <ul>
+          <li>Se muestra la foto del cliente.</li>
+          <li>Se registra la fecha del pago.</li>
+          <li>Se indica el valor pagado.</li>
+          <li>Se muestra la cuota actual y el total de cuotas.</li>
+          <li>Se informa el saldo restante.</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>7. Capital inicial editable</h2>
+        <p>
+          En el tablero principal existe un cuadro para definir el capital inicial de
+          trabajo. Ese valor se va comparando con los prestamos registrados.
+        </p>
+        <ul>
+          <li>Si la tabla <code>configuracion_app</code> esta activa, se guarda para todos los dispositivos.</li>
+          <li>Si no esta disponible, se guarda localmente en el navegador.</li>
+          <li>La app indica si el valor esta guardado de forma compartida o solo local.</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>8. Limpieza automatica del historial</h2>
+        <p>
+          Para ahorrar almacenamiento, la app conserva solo un ano de historial y
+          puede limpiar informacion antigua.
+        </p>
+        <ul>
+          <li>Los pagos de mas de 1 ano se eliminan.</li>
+          <li>Los prestamos de mas de 1 ano se eliminan.</li>
+          <li>
+            Los clientes antiguos se eliminan solo si ya no tienen prestamos
+            asociados.
+          </li>
+          <li>La limpieza puede ejecutarse manualmente desde <strong>Configuracion</strong>.</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>9. Descarga de Excel</h2>
+        <p>
+          Hay un boton para descargar un archivo Excel con toda la informacion
+          registrada.
+        </p>
+        <ul>
+          <li>Incluye hoja de resumen.</li>
+          <li>Incluye clientes.</li>
+          <li>Incluye prestamos.</li>
+          <li>Incluye pagos.</li>
+        </ul>
+        <div class="callout">
+          <strong>Uso sugerido</strong>
+          Descarga el Excel antes de hacer limpiezas manuales, cambios grandes o
+          eliminaciones.
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>10. Despliegue y edicion futura</h2>
+        <p>
+          El proyecto ya fue subido a GitHub y desplegado en Vercel, por lo que cada
+          cambio que subas al repositorio principal puede publicarse nuevamente.
+        </p>
+        <ul>
+          <li>Repositorio: <code>ventemiguel00-code/creditos-cb</code></li>
+          <li>Hosting: <code>creditos-cb.vercel.app</code></li>
+          <li>Framework: <code>Next.js</code></li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>11. Archivos y puntos tecnicos importantes</h2>
+        <p>
+          Si en el futuro alguien vuelve a tocar el proyecto, estos son los archivos
+          clave para entenderlo rapido.
+        </p>
+        <ul>
+          <li><code>app/page.tsx</code>: interfaz principal y flujo de la app.</li>
+          <li><code>app/api/export/excel/route.ts</code>: exportacion de Excel.</li>
+          <li><code>app/api/maintenance/cleanup/route.ts</code>: limpieza de historial.</li>
+          <li><code>app/api/auth/change-password/route.ts</code>: cambio de clave.</li>
+          <li><code>lib/auth.ts</code>: manejo de autenticacion.</li>
+          <li><code>SUPABASE_CONFIGURACION_APP.sql</code>: capital inicial compartido.</li>
+          <li><code>SUPABASE_CREDENCIALES_APP.sql</code>: tabla para credenciales editables.</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>12. Recomendaciones finales</h2>
+        <ul>
+          <li>Mantener la clave en un lugar seguro.</li>
+          <li>Descargar el Excel como respaldo con frecuencia.</li>
+          <li>Revisar que Vercel tenga las variables de entorno configuradas.</li>
+          <li>Probar la app en celular y computador despues de cada cambio importante.</li>
+        </ul>
+      </section>
+
+      <div class="footer">
+        <p>
+          Este manual queda listo para abrir, leer e imprimir. Si quieres, el
+          siguiente paso puede ser dejarte tambien una version en <strong>PDF</strong>
+          o una <strong>portada mas comercial</strong> para presentarla a clientes o
+          socios.
+        </p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

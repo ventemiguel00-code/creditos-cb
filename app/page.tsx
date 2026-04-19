@@ -1084,10 +1084,10 @@ export default function Home() {
             </h1>
             <div className="mt-6 overflow-hidden rounded-[28px] border border-white/30 bg-white/10 p-3 backdrop-blur">
               <Image
-                src="/creditos-cb-logo.png"
-                alt={BRAND_NAME}
-                width={720}
-                height={405}
+                src="/creditos-cb-hero-whatsapp.jpeg"
+                alt="Creditos rapidos, seguros y sin complicaciones"
+                width={1152}
+                height={768}
                 priority
                 className="h-auto w-full rounded-[20px] object-cover"
               />
