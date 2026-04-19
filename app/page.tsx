@@ -60,6 +60,8 @@ type LoanEditForm = {
 
 const LOCAL_ACCESS_KEY = "camilobm-local-access";
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
+const APP_CONFIG_TABLE = "configuracion_app";
+const APP_CONFIG_ROW_ID = "principal";
 const APP_USERNAME = process.env.NEXT_PUBLIC_APP_USERNAME ?? "CamiloBM";
 const APP_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD ?? "12345678";
 const SUPABASE_LOGIN_EMAIL = process.env.NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL ?? "";
@@ -202,6 +204,41 @@ async function selectTableData(table: "clientes" | "prestamos" | "pagos") {
   return supabase.from(table).select("*");
 }
 
+async function loadInitialCapitalValue() {
+  const localFallback =
+    typeof window === "undefined"
+      ? 0
+      : Math.max(Number(window.localStorage.getItem(INITIAL_CAPITAL_KEY) ?? "0"), 0);
+
+  const response = await supabase
+    .from(APP_CONFIG_TABLE)
+    .select("monto_inicial")
+    .eq("id", APP_CONFIG_ROW_ID)
+    .maybeSingle();
+
+  if (response.error) {
+    if (isSchemaColumnError(response.error.message)) {
+      return {
+        value: localFallback,
+        source: "local" as const,
+      };
+    }
+
+    throw response.error;
+  }
+
+  const value = Math.max(Number(response.data?.monto_inicial ?? localFallback), 0);
+
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(INITIAL_CAPITAL_KEY, String(value));
+  }
+
+  return {
+    value,
+    source: "supabase" as const,
+  };
+}
+
 export default function Home() {
   const [authStatus, setAuthStatus] = useState<"loading" | "signed_out" | "signed_in">("loading");
   const [authMessage, setAuthMessage] = useState("");
@@ -219,6 +256,7 @@ export default function Home() {
 
     return window.localStorage.getItem(INITIAL_CAPITAL_KEY) ?? "0";
   });
+  const [capitalStorageMode, setCapitalStorageMode] = useState<"supabase" | "local">("local");
   const [loanEditForm, setLoanEditForm] = useState<LoanEditForm | null>(null);
   const [loginForm, setLoginForm] = useState({
     usuario: APP_USERNAME,
@@ -333,10 +371,11 @@ export default function Home() {
   async function loadData() {
     setScreenMessage("");
 
-    const [clientesResponse, prestamosResponse, pagosResponse] = await Promise.all([
+    const [clientesResponse, prestamosResponse, pagosResponse, initialCapitalResponse] = await Promise.all([
       selectTableData("clientes"),
       selectTableData("prestamos"),
       selectTableData("pagos"),
+      loadInitialCapitalValue(),
     ]);
 
     if (clientesResponse.error) {
@@ -371,6 +410,8 @@ export default function Home() {
     setClientes((clientesResponse.data ?? []).map((row) => mapCliente(row)));
     setPrestamos(prestamosMapped);
     setPagos(pagosMapped);
+    setInitialCapitalInput(String(initialCapitalResponse.value));
+    setCapitalStorageMode(initialCapitalResponse.source);
   }
 
   async function refreshData() {
@@ -531,11 +572,42 @@ export default function Home() {
     }
   }
 
-  function handleSaveInitialCapital() {
+  async function handleSaveInitialCapital() {
     const normalizedValue = String(Math.max(Number(initialCapitalInput || 0), 0));
     setInitialCapitalInput(normalizedValue);
-    window.localStorage.setItem(INITIAL_CAPITAL_KEY, normalizedValue);
-    setScreenMessage("Monto inicial actualizado correctamente.");
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(INITIAL_CAPITAL_KEY, normalizedValue);
+    }
+
+    try {
+      const { error } = await supabase.from(APP_CONFIG_TABLE).upsert(
+        {
+          id: APP_CONFIG_ROW_ID,
+          monto_inicial: Number(normalizedValue),
+        },
+        {
+          onConflict: "id",
+        },
+      );
+
+      if (error) {
+        if (isSchemaColumnError(error.message)) {
+          setCapitalStorageMode("local");
+          setScreenMessage(
+            "Monto inicial guardado solo en este dispositivo. Ejecuta el SQL de configuracion_app para compartirlo entre celular y PC.",
+          );
+          return;
+        }
+
+        throw error;
+      }
+
+      setCapitalStorageMode("supabase");
+      setScreenMessage("Monto inicial actualizado y sincronizado en Supabase.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
   }
 
   async function handleRegisterPayment(event: FormEvent<HTMLFormElement>) {
@@ -1266,6 +1338,9 @@ export default function Home() {
                 Este valor se guarda en este dispositivo y el disponible se calcula como:
                 monto inicial - capital prestado + total recaudado.
               </div>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                Guardado en: {capitalStorageMode === "supabase" ? "Supabase" : "Solo este dispositivo"}
+              </p>
             </article>
 
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
