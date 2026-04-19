@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   const username = body?.username ?? "";
   const password = body?.password ?? "";
 
-  if (!isValidLogin(username, password)) {
+  if (!(await isValidLogin(username, password))) {
     return NextResponse.json(
       {
         ok: false,
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   const response = NextResponse.json({ ok: true });
   response.cookies.set(
     AUTH_COOKIE_NAME,
-    buildSessionToken(),
+    await buildSessionToken(),
     getSessionCookieOptions(),
   );
 

@@ -7,6 +7,6 @@ export async function GET() {
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
 
   return NextResponse.json({
-    authenticated: isValidSessionToken(token),
+    authenticated: await isValidSessionToken(token),
   });
 }

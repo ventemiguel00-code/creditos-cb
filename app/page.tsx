@@ -261,6 +261,11 @@ export default function Home() {
     usuario: "",
     clave: "",
   });
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
   const [clientSearch, setClientSearch] = useState("");
   const [clientForm, setClientForm] = useState({
     nombre: "",
@@ -474,6 +479,37 @@ export default function Home() {
     setPagos([]);
     setAuthStatus("signed_out");
     setScreenMessage("");
+  }
+
+  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setScreenMessage("");
+
+    try {
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify(passwordForm),
+      });
+
+      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.message ?? "No fue posible cambiar la clave.");
+      }
+
+      setPasswordForm({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+      setScreenMessage("Clave actualizada correctamente.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    }
   }
 
   async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
@@ -1375,6 +1411,86 @@ export default function Home() {
               <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                 Guardado en: {capitalStorageMode === "supabase" ? "Supabase" : "Solo este dispositivo"}
               </p>
+            </article>
+
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Seguridad
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Cambiar clave de acceso
+                  </h2>
+                </div>
+              </div>
+
+              <form onSubmit={handleChangePassword} className="grid gap-3">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Clave actual</span>
+                  <input
+                    type="password"
+                    value={passwordForm.currentPassword}
+                    onChange={(event) =>
+                      setPasswordForm((current) => ({
+                        ...current,
+                        currentPassword: event.target.value,
+                      }))
+                    }
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder="Clave actual"
+                  />
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Nueva clave</span>
+                    <input
+                      type="password"
+                      value={passwordForm.newPassword}
+                      onChange={(event) =>
+                        setPasswordForm((current) => ({
+                          ...current,
+                          newPassword: event.target.value,
+                        }))
+                      }
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="Nueva clave"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">
+                      Confirmar nueva clave
+                    </span>
+                    <input
+                      type="password"
+                      value={passwordForm.confirmPassword}
+                      onChange={(event) =>
+                        setPasswordForm((current) => ({
+                          ...current,
+                          confirmPassword: event.target.value,
+                        }))
+                      }
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="Repite la nueva clave"
+                    />
+                  </label>
+                </div>
+
+                <div className="rounded-[24px] bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                  Para que el cambio quede realmente compartido en la version online, configura
+                  <code> SUPABASE_SERVICE_ROLE_KEY </code> en Vercel y ejecuta el SQL de
+                  <code> credenciales_app </code>.
+                </div>
+
+                <button
+                  type="submit"
+                  className="brand-button-dark h-13 rounded-2xl px-5 text-sm font-bold transition"
+                >
+                  Actualizar clave
+                </button>
+              </form>
             </article>
 
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
