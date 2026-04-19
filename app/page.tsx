@@ -1,13 +1,19 @@
 "use client";
 
 import Image from "next/image";
-import { ChangeEvent, FormEvent, useDeferredValue, useEffect, useState, useTransition } from "react";
+import {
+  ChangeEvent,
+  FormEvent,
+  useDeferredValue,
+  useEffect,
+  useState,
+  useTransition,
+} from "react";
 import { supabase } from "@/lib/supabase";
 import {
   calculateLoanValues,
   formatCurrency,
   formatDate,
-  formatShortDate,
   roundCurrency,
 } from "@/lib/loan-utils";
 
@@ -59,6 +65,7 @@ type LoanEditForm = {
 };
 
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
+const LAST_CLEANUP_RUN_KEY = "creditos-cb-last-cleanup-run";
 const APP_CONFIG_TABLE = "configuracion_app";
 const APP_CONFIG_ROW_ID = "principal";
 const SUPABASE_LOGIN_EMAIL = process.env.NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL ?? "";
@@ -246,7 +253,9 @@ export default function Home() {
   const [prestamos, setPrestamos] = useState<Prestamo[]>([]);
   const [pagos, setPagos] = useState<Pago[]>([]);
   const [photoPreview, setPhotoPreview] = useState("");
-  const [activeTab, setActiveTab] = useState<"panel" | "clientes">("panel");
+  const [activeTab, setActiveTab] = useState<
+    "resumen" | "clientes" | "prestamos" | "pagos" | "configuracion"
+  >("resumen");
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
   const [initialCapitalInput, setInitialCapitalInput] = useState(() => {
     if (typeof window === "undefined") {
@@ -283,10 +292,39 @@ export default function Home() {
     prestamoId: "",
   });
   const [isPending, startTransition] = useTransition();
+  const [isDownloadingExcel, setIsDownloadingExcel] = useState(false);
+  const [isCleaningHistory, setIsCleaningHistory] = useState(false);
   const deferredClientSearch = useDeferredValue(clientSearch);
 
   useEffect(() => {
     let isMounted = true;
+    const maybeRunRetentionCleanup = async () => {
+      const lastCleanupRun = window.localStorage.getItem(LAST_CLEANUP_RUN_KEY);
+
+      if (lastCleanupRun) {
+        const diffMs = Date.now() - new Date(lastCleanupRun).getTime();
+        const oneDayMs = 1000 * 60 * 60 * 24;
+
+        if (diffMs < oneDayMs) {
+          return;
+        }
+      }
+
+      try {
+        const response = await fetch("/api/maintenance/cleanup", {
+          method: "POST",
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        window.localStorage.setItem(LAST_CLEANUP_RUN_KEY, new Date().toISOString());
+      } catch {
+        // Silent auto-cleanup failure during bootstrap.
+      }
+    };
 
     const bootstrap = async () => {
       const [sessionResponse, supabaseSessionResponse] = await Promise.all([
@@ -309,6 +347,7 @@ export default function Home() {
       if (accessGranted && data.session) {
         setAuthStatus("signed_in");
         await loadData();
+        void maybeRunRetentionCleanup();
         return;
       }
 
@@ -321,6 +360,7 @@ export default function Home() {
 
           setAuthStatus("signed_in");
           await loadData();
+          void maybeRunRetentionCleanup();
           return;
         } catch (error) {
           if (!isMounted) {
@@ -463,6 +503,7 @@ export default function Home() {
       await initializeSupabaseAccess();
       setAuthStatus("signed_in");
       await loadData();
+      void runRetentionCleanupIfNeeded();
     } catch (error) {
       setAuthMessage(getErrorMessage(error));
     }
@@ -509,6 +550,112 @@ export default function Home() {
       setScreenMessage("Clave actualizada correctamente.");
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
+    }
+  }
+
+  async function handleDownloadExcel() {
+    setScreenMessage("");
+    setIsDownloadingExcel(true);
+
+    try {
+      const response = await fetch("/api/export/excel", {
+        method: "GET",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(payload?.message ?? "No fue posible generar el Excel.");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "creditos-cb-reporte.xlsx";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      setScreenMessage("Archivo Excel descargado correctamente.");
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    } finally {
+      setIsDownloadingExcel(false);
+    }
+  }
+
+  async function executeRetentionCleanup(showMessageOnNoop = false) {
+    const response = await fetch("/api/maintenance/cleanup", {
+      method: "POST",
+      credentials: "include",
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          ok?: boolean;
+          message?: string;
+          pagosEliminados?: number;
+          prestamosEliminados?: number;
+          clientesEliminados?: number;
+        }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.message ?? "No fue posible limpiar el historial.");
+    }
+
+    const summary = `Limpieza completada. Pagos: ${payload?.pagosEliminados ?? 0}, Prestamos: ${payload?.prestamosEliminados ?? 0}, Clientes: ${payload?.clientesEliminados ?? 0}.`;
+    const hadChanges =
+      (payload?.pagosEliminados ?? 0) > 0 ||
+      (payload?.prestamosEliminados ?? 0) > 0 ||
+      (payload?.clientesEliminados ?? 0) > 0;
+
+    window.localStorage.setItem(LAST_CLEANUP_RUN_KEY, new Date().toISOString());
+    await loadData();
+
+    if (hadChanges || showMessageOnNoop) {
+      setScreenMessage(hadChanges ? summary : "No habia registros de mas de 1 año para borrar.");
+    }
+  }
+
+  async function handleCleanupHistory() {
+    const confirmed = window.confirm(
+      "Se borraran pagos, prestamos y clientes con mas de 1 año para ahorrar almacenamiento. Deseas continuar?",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setScreenMessage("");
+    setIsCleaningHistory(true);
+
+    try {
+      await executeRetentionCleanup(true);
+    } catch (error) {
+      setScreenMessage(getErrorMessage(error));
+    } finally {
+      setIsCleaningHistory(false);
+    }
+  }
+
+  async function runRetentionCleanupIfNeeded() {
+    const lastCleanupRun = window.localStorage.getItem(LAST_CLEANUP_RUN_KEY);
+
+    if (lastCleanupRun) {
+      const diffMs = Date.now() - new Date(lastCleanupRun).getTime();
+      const oneDayMs = 1000 * 60 * 60 * 24;
+
+      if (diffMs < oneDayMs) {
+        return;
+      }
+    }
+
+    try {
+      await executeRetentionCleanup(false);
+    } catch {
+      // Silent auto-cleanup failure; manual action remains available in configuration.
     }
   }
 
@@ -900,6 +1047,13 @@ export default function Home() {
       .toLowerCase()
       .includes(normalizedClientSearch);
   });
+  const tabItems = [
+    { id: "resumen", label: "Resumen" },
+    { id: "clientes", label: "Clientes" },
+    { id: "prestamos", label: "Prestamos" },
+    { id: "pagos", label: "Pagos" },
+    { id: "configuracion", label: "Configuracion" },
+  ] as const;
 
   if (authStatus === "loading") {
     return (
@@ -1280,25 +1434,14 @@ export default function Home() {
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => setActiveTab("panel")}
+                  onClick={() => setActiveTab("resumen")}
                   className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-                    activeTab === "panel"
+                    activeTab === "resumen"
                       ? "brand-button text-white"
                       : "border border-slate-200 bg-white text-slate-700"
                   }`}
                 >
-                  Panel principal
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("clientes")}
-                  className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-                    activeTab === "clientes"
-                      ? "brand-button text-white"
-                      : "border border-slate-200 bg-white text-slate-700"
-                  }`}
-                >
-                  Listado de clientes
+                  Resumen
                 </button>
               </div>
             </div>
@@ -1322,7 +1465,26 @@ export default function Home() {
           </div>
         </header>
 
-        {activeTab === "panel" ? <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="glass-panel rounded-[26px] p-3 sm:p-4">
+          <div className="hide-scrollbar flex gap-2 overflow-x-auto">
+            {tabItems.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`min-w-fit rounded-2xl px-4 py-3 text-sm font-bold transition ${
+                  activeTab === tab.id
+                    ? "brand-button text-white"
+                    : "bg-white text-slate-700 border border-slate-200"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {activeTab === "resumen" ? <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {[
             {
               label: "Monto Inicial",
@@ -1366,7 +1528,129 @@ export default function Home() {
           </div>
         ) : null}
 
-        {activeTab === "panel" ? <section className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+        {activeTab === "resumen" ? (
+        <section className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+          <div className="flex flex-col gap-4">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Panorama
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Resumen del negocio
+                </h2>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-[24px] bg-white/80 p-4 shadow-sm">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Clientes</p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">{clientes.length}</p>
+                </div>
+                <div className="rounded-[24px] bg-white/80 p-4 shadow-sm">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Prestamos</p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">{prestamos.length}</p>
+                </div>
+                <div className="rounded-[24px] bg-white/80 p-4 shadow-sm">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Pagos</p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">{pagos.length}</p>
+                </div>
+              </div>
+            </article>
+
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Clientes
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Ultimos registrados
+                  </h2>
+                </div>
+              </div>
+              <div className="grid gap-3">
+                {clientes.slice(0, 4).map((cliente) => (
+                  <article
+                    key={cliente.id}
+                    className="rounded-[24px] border border-white/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(244,252,247,0.88))] p-4 shadow-sm"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-14 w-14 overflow-hidden rounded-2xl bg-slate-100">
+                        {cliente.fotoUrl ? (
+                          <Image
+                            src={cliente.fotoUrl}
+                            alt={cliente.nombre}
+                            width={56}
+                            height={56}
+                            unoptimized
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-xs font-bold text-slate-500">
+                            Sin foto
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-lg font-black text-slate-900">
+                          {cliente.nombre}
+                        </h3>
+                        <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </article>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Pagos
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Ultimos movimientos
+                  </h2>
+                </div>
+              </div>
+              <div className="grid gap-3">
+                {pagos.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                    Todavia no se han registrado pagos.
+                  </div>
+                ) : null}
+
+                {pagos.slice(0, 5).map((pago) => {
+                  const cliente =
+                    clientes.find((item) => item.id === pago.clienteId)?.nombre ?? "Cliente";
+
+                  return (
+                    <article
+                      key={pago.id}
+                      className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-black text-slate-900">{cliente}</h3>
+                          <p className="mt-1 text-sm text-slate-500">{formatDate(pago.createdAt)}</p>
+                        </div>
+                        <p className="text-lg font-black text-green-700">
+                          {formatCurrency(pago.monto)}
+                        </p>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </article>
+          </div>
+        </section>
+        ) : null}
+
+        {activeTab === "configuracion" ? (
+        <section className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
           <div className="flex flex-col gap-4">
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
               <div className="mb-5 flex items-center justify-between">
@@ -1497,6 +1781,49 @@ export default function Home() {
               <div className="mb-5 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Respaldo
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Excel y retencion de datos
+                  </h2>
+                </div>
+              </div>
+
+              <div className="grid gap-3">
+                <button
+                  type="button"
+                  onClick={handleDownloadExcel}
+                  className="brand-button h-13 rounded-2xl px-5 text-sm font-bold transition"
+                >
+                  {isDownloadingExcel ? "Generando Excel..." : "Descargar Excel completo"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCleanupHistory}
+                  className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm font-bold text-amber-900 transition hover:bg-amber-100"
+                >
+                  {isCleaningHistory
+                    ? "Limpiando historico..."
+                    : "Borrar historial de mas de 1 año"}
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-[24px] bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                La app intentara limpiar automaticamente una vez al dia los registros de mas de
+                1 año. Tambien puedes lanzar la limpieza manualmente cuando quieras.
+              </div>
+            </article>
+          </div>
+        </section>
+        ) : null}
+
+        {activeTab === "clientes" ? (
+          <section className="grid gap-4">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
                     Clientes
                   </p>
                   <h2 className="section-title text-2xl font-black text-slate-900">
@@ -1606,6 +1933,130 @@ export default function Home() {
               </form>
             </article>
 
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                    Clientes
+                  </p>
+                  <h2 className="section-title text-2xl font-black text-slate-900">
+                    Listado completo
+                  </h2>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Aqui puedes ver todos los clientes registrados y la fecha exacta de creacion.
+                  </p>
+                </div>
+                <div className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm">
+                  {clientes.length} clientes
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <input
+                  value={clientSearch}
+                  onChange={(event) => setClientSearch(event.target.value)}
+                  placeholder="Buscar cliente, telefono, correo o direccion"
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-green-500"
+                />
+              </div>
+
+              <div className="grid gap-3 lg:hidden">
+                {visibleClientes.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                    No se encontraron clientes con ese criterio.
+                  </div>
+                ) : null}
+
+                {visibleClientes.map((cliente) => (
+                  <article
+                    key={cliente.id}
+                    className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100">
+                        {cliente.fotoUrl ? (
+                          <Image
+                            src={cliente.fotoUrl}
+                            alt={cliente.nombre}
+                            width={64}
+                            height={64}
+                            unoptimized
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-xs font-bold text-slate-500">
+                            Sin foto
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-lg font-black text-slate-900">
+                          {cliente.nombre}
+                        </h3>
+                        <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
+                        <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2 rounded-[22px] bg-slate-50 p-3 text-sm text-slate-600">
+                      <p>
+                        <strong className="text-slate-900">Direccion:</strong> {cliente.direccion}
+                      </p>
+                      <p>
+                        <strong className="text-slate-900">Creado:</strong> {formatDate(cliente.createdAt)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteClient(cliente)}
+                      className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
+                    >
+                      Borrar cliente
+                    </button>
+                  </article>
+                ))}
+              </div>
+
+              <div className="hidden overflow-hidden rounded-[24px] border border-slate-200 lg:block">
+                <table className="min-w-full bg-white/80">
+                  <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
+                    <tr>
+                      <th className="px-4 py-3">Cliente</th>
+                      <th className="px-4 py-3">Telefono</th>
+                      <th className="px-4 py-3">Correo</th>
+                      <th className="px-4 py-3">Direccion</th>
+                      <th className="px-4 py-3">Fecha de creacion</th>
+                      <th className="px-4 py-3">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleClientes.map((cliente) => (
+                      <tr key={cliente.id} className="border-t border-slate-100 text-sm">
+                        <td className="px-4 py-3 font-semibold text-slate-800">{cliente.nombre}</td>
+                        <td className="px-4 py-3">{cliente.telefono}</td>
+                        <td className="px-4 py-3">{cliente.correo || "--"}</td>
+                        <td className="px-4 py-3">{cliente.direccion}</td>
+                        <td className="px-4 py-3">{formatDate(cliente.createdAt)}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteClient(cliente)}
+                            className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
+                          >
+                            Borrar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        ) : null}
+
+        {activeTab === "prestamos" ? (
+        <section className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
+          <div className="flex flex-col gap-4">
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
               <div className="mb-5">
                 <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
@@ -1746,144 +2197,9 @@ export default function Home() {
                 </button>
               </form>
             </article>
-
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
-              <div className="mb-5">
-                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
-                  Pagos
-                </p>
-                <h2 className="section-title text-2xl font-black text-slate-900">
-                  Registrar cuota y emitir recibo
-                </h2>
-              </div>
-
-              <form onSubmit={handleRegisterPayment} className="grid gap-3">
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Prestamo a cobrar
-                  </span>
-                  <select
-                    value={paymentForm.prestamoId}
-                    onChange={(event) =>
-                      setPaymentForm({ prestamoId: event.target.value })
-                    }
-                    required
-                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
-                  >
-                    <option value="">Selecciona un prestamo activo</option>
-                    {prestamos
-                      .filter((prestamo) => prestamo.saldoRestante > 0)
-                      .map((prestamo) => {
-                        const cliente =
-                          clientes.find((item) => item.id === prestamo.clienteId)?.nombre ??
-                          "Cliente";
-
-                        return (
-                          <option key={prestamo.id} value={prestamo.id}>
-                            {cliente} - {formatCurrency(prestamo.valorCuota)} - saldo{" "}
-                            {formatCurrency(prestamo.saldoRestante)}
-                          </option>
-                        );
-                      })}
-                  </select>
-                </label>
-
-                <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/70 p-4 text-sm leading-6 text-slate-600">
-                  El sistema registra una cuota completa por clic y genera el ticket imprimible
-                  con fecha, foto, valor del pago, cuota y saldo restante.
-                </div>
-
-                <button type="submit" className="brand-button-dark h-13 rounded-2xl px-5 text-sm font-bold transition">
-                  Registrar pago y abrir recibo
-                </button>
-              </form>
-            </article>
           </div>
 
           <div className="flex flex-col gap-4">
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
-              <div className="mb-5 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
-                    Clientes
-                  </p>
-                  <h2 className="section-title text-2xl font-black text-slate-900">
-                    Agenda visual
-                  </h2>
-                </div>
-                <div className="w-full max-w-xs">
-                  <input
-                    value={clientSearch}
-                    onChange={(event) => setClientSearch(event.target.value)}
-                    placeholder="Buscar cliente, telefono o direccion"
-                    className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-green-500"
-                  />
-                </div>
-              </div>
-
-              <div className="hide-scrollbar flex gap-3 overflow-x-auto pb-1 lg:grid lg:max-h-[360px] lg:grid-cols-1 lg:overflow-y-auto">
-                {visibleClientes.length === 0 ? (
-                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
-                    No se encontraron clientes con ese criterio.
-                  </div>
-                ) : null}
-
-                {visibleClientes.map((cliente) => (
-                  <article
-                    key={cliente.id}
-                    className="min-w-[280px] rounded-[26px] border border-white/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(244,252,247,0.88))] p-4 shadow-sm"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100">
-                        {cliente.fotoUrl ? (
-                          <Image
-                            src={cliente.fotoUrl}
-                            alt={cliente.nombre}
-                            width={64}
-                            height={64}
-                            unoptimized
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full items-center justify-center text-xs font-bold text-slate-500">
-                            Sin foto
-                          </div>
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <h3 className="truncate text-lg font-black text-slate-900">
-                          {cliente.nombre}
-                        </h3>
-                        <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
-                        <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <span className="rounded-full bg-green-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-green-700">
-                        Cliente activo
-                      </span>
-                      <span className="rounded-full bg-sky-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-sky-700">
-                        {formatShortDate(cliente.createdAt)}
-                      </span>
-                    </div>
-                    <p className="mt-4 rounded-[20px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-                      {cliente.direccion}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteClient(cliente)}
-                      className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
-                    >
-                      Borrar cliente
-                    </button>
-                    <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                      Creado: {formatShortDate(cliente.createdAt)}
-                    </p>
-                  </article>
-                ))}
-              </div>
-            </article>
-
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
               <div className="mb-5 flex items-center justify-between">
                 <div>
@@ -1925,33 +2241,23 @@ export default function Home() {
                       </div>
                       <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                         <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                            Capital
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Capital</p>
                           <p className="mt-2 font-bold">{formatCurrency(prestamo.montoCapital)}</p>
                         </div>
                         <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                            Interes
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Interes</p>
                           <p className="mt-2 font-bold">{prestamo.porcentajeInteres}%</p>
                         </div>
                         <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                            Cuota
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Cuota</p>
                           <p className="mt-2 font-bold">{formatCurrency(prestamo.valorCuota)}</p>
                         </div>
                         <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                            Total
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Total</p>
                           <p className="mt-2 font-bold">{formatCurrency(prestamo.totalCobrar)}</p>
                         </div>
                         <div className="rounded-2xl bg-yellow-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-yellow-700">
-                            Saldo
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.2em] text-yellow-700">Saldo</p>
                           <p className="mt-2 font-bold text-yellow-900">
                             {formatCurrency(prestamo.saldoRestante)}
                           </p>
@@ -2042,7 +2348,68 @@ export default function Home() {
                 </table>
               </div>
             </article>
+          </div>
+        </section>
+        ) : null}
 
+        {activeTab === "pagos" ? (
+        <section className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
+          <div className="flex flex-col gap-4">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+              <div className="mb-5">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Pagos
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Registrar cuota y emitir recibo
+                </h2>
+              </div>
+
+              <form onSubmit={handleRegisterPayment} className="grid gap-3">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">
+                    Prestamo a cobrar
+                  </span>
+                  <select
+                    value={paymentForm.prestamoId}
+                    onChange={(event) => setPaymentForm({ prestamoId: event.target.value })}
+                    required
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                  >
+                    <option value="">Selecciona un prestamo activo</option>
+                    {prestamos
+                      .filter((prestamo) => prestamo.saldoRestante > 0)
+                      .map((prestamo) => {
+                        const cliente =
+                          clientes.find((item) => item.id === prestamo.clienteId)?.nombre ??
+                          "Cliente";
+
+                        return (
+                          <option key={prestamo.id} value={prestamo.id}>
+                            {cliente} - {formatCurrency(prestamo.valorCuota)} - saldo{" "}
+                            {formatCurrency(prestamo.saldoRestante)}
+                          </option>
+                        );
+                      })}
+                  </select>
+                </label>
+
+                <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/70 p-4 text-sm leading-6 text-slate-600">
+                  El sistema registra una cuota completa por clic y genera el ticket imprimible
+                  con fecha, foto, valor del pago, cuota y saldo restante.
+                </div>
+
+                <button
+                  type="submit"
+                  className="brand-button-dark h-13 rounded-2xl px-5 text-sm font-bold transition"
+                >
+                  Registrar pago y abrir recibo
+                </button>
+              </form>
+            </article>
+          </div>
+
+          <div className="flex flex-col gap-4">
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
               <div className="mb-5 flex items-center justify-between">
                 <div>
@@ -2098,119 +2465,8 @@ export default function Home() {
               </div>
             </article>
           </div>
-        </section> : (
-          <section className="grid gap-4">
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
-              <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
-                    Clientes
-                  </p>
-                  <h2 className="section-title text-2xl font-black text-slate-900">
-                    Listado completo
-                  </h2>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Aqui puedes ver todos los clientes registrados y la fecha exacta de creacion.
-                  </p>
-                </div>
-                <div className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm">
-                  {clientes.length} clientes
-                </div>
-              </div>
-
-              <div className="grid gap-3 lg:hidden">
-                {clientes.length === 0 ? (
-                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
-                    Aun no hay clientes registrados.
-                  </div>
-                ) : null}
-
-                {clientes.map((cliente) => (
-                  <article
-                    key={cliente.id}
-                    className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100">
-                        {cliente.fotoUrl ? (
-                          <Image
-                            src={cliente.fotoUrl}
-                            alt={cliente.nombre}
-                            width={64}
-                            height={64}
-                            unoptimized
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full items-center justify-center text-xs font-bold text-slate-500">
-                            Sin foto
-                          </div>
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <h3 className="truncate text-lg font-black text-slate-900">
-                          {cliente.nombre}
-                        </h3>
-                        <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
-                        <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 grid gap-2 rounded-[22px] bg-slate-50 p-3 text-sm text-slate-600">
-                      <p>
-                        <strong className="text-slate-900">Direccion:</strong> {cliente.direccion}
-                      </p>
-                      <p>
-                        <strong className="text-slate-900">Creado:</strong> {formatDate(cliente.createdAt)}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteClient(cliente)}
-                      className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
-                    >
-                      Borrar cliente
-                    </button>
-                  </article>
-                ))}
-              </div>
-
-              <div className="hidden overflow-hidden rounded-[24px] border border-slate-200 lg:block">
-                <table className="min-w-full bg-white/80">
-                  <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
-                    <tr>
-                      <th className="px-4 py-3">Cliente</th>
-                      <th className="px-4 py-3">Telefono</th>
-                      <th className="px-4 py-3">Correo</th>
-                      <th className="px-4 py-3">Direccion</th>
-                      <th className="px-4 py-3">Fecha de creacion</th>
-                      <th className="px-4 py-3">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {clientes.map((cliente) => (
-                      <tr key={cliente.id} className="border-t border-slate-100 text-sm">
-                        <td className="px-4 py-3 font-semibold text-slate-800">{cliente.nombre}</td>
-                        <td className="px-4 py-3">{cliente.telefono}</td>
-                        <td className="px-4 py-3">{cliente.correo || "--"}</td>
-                        <td className="px-4 py-3">{cliente.direccion}</td>
-                        <td className="px-4 py-3">{formatDate(cliente.createdAt)}</td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteClient(cliente)}
-                            className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
-                          >
-                            Borrar
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-          </section>
-        )}
+        </section>
+        ) : null}
         </div>
       </div>
     </main>
