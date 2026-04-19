@@ -103,9 +103,13 @@ textarea {
 
 .brand-hero {
   background:
-    radial-gradient(circle at top left, rgba(247, 223, 30, 0.34), transparent 20%),
-    radial-gradient(circle at bottom right, rgba(0, 184, 255, 0.24), transparent 26%),
-    linear-gradient(135deg, rgba(16, 133, 47, 0.98), rgba(13, 95, 151, 0.96));
+    radial-gradient(circle at top left, rgba(247, 223, 30, 0.3), transparent 18%),
+    radial-gradient(circle at 85% 18%, rgba(255, 255, 255, 0.16), transparent 16%),
+    radial-gradient(circle at bottom right, rgba(0, 184, 255, 0.26), transparent 28%),
+    linear-gradient(145deg, rgba(21, 142, 50, 0.98), rgba(9, 109, 96, 0.96) 52%, rgba(13, 95, 151, 0.97));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 28px 60px rgba(7, 61, 93, 0.24);
 }
 
 .receipt-sheet {

@@ -1076,40 +1076,95 @@ export default function Home() {
       <main className="min-h-screen px-4 py-8">
         <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-6 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="brand-hero hidden rounded-[36px] border border-white/60 p-10 text-white shadow-2xl lg:block">
-            <p className="mb-3 inline-flex rounded-full bg-white/14 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em]">
-              Mobile First
-            </p>
-            <h1 className="section-title text-5xl font-black leading-[0.95]">
-              Creditos CB pensado para cobrar rapido y verse potente.
-            </h1>
-            <div className="mt-6 overflow-hidden rounded-[28px] border border-white/30 bg-white/10 p-3 backdrop-blur">
-              <Image
-                src="/creditos-cb-hero-whatsapp.jpeg"
-                alt="Creditos rapidos, seguros y sin complicaciones"
-                width={1152}
-                height={768}
-                priority
-                className="h-auto w-full rounded-[20px] object-cover"
-              />
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <p className="inline-flex rounded-full bg-white/14 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em]">
+                Desktop Premium
+              </p>
+              <p className="rounded-full border border-white/20 bg-black/10 px-4 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white/90">
+                Cobro agil y control total
+              </p>
             </div>
-            <p className="mt-6 max-w-xl text-lg text-white/90">
-              Registra clientes con foto, define tu propio porcentaje de interes, lleva el
-              saldo restante y genera recibos listos para imprimir desde el celular o el
-              computador.
+            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-lime-100/90">
+              Creditos CB
             </p>
-            <div className="mt-8 grid gap-4 sm:grid-cols-3">
+            <h1 className="section-title mt-3 text-5xl font-black leading-[0.92]">
+              Tu vitrina digital para prestar con mas presencia y cobrar con orden.
+            </h1>
+            <p className="mt-5 max-w-2xl text-lg leading-8 text-white/88">
+              Muestra una imagen mas fuerte de tu negocio mientras administras clientes,
+              prestamos, pagos, recibos y saldo restante desde un panel claro y rapido.
+            </p>
+            <div className="mt-6 grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
+              <div className="overflow-hidden rounded-[28px] border border-white/30 bg-white/10 p-3 backdrop-blur">
+                <Image
+                  src="/creditos-cb-hero-whatsapp.jpeg"
+                  alt="Creditos rapidos, seguros y sin complicaciones"
+                  width={1152}
+                  height={768}
+                  priority
+                  className="h-auto w-full rounded-[20px] object-cover"
+                />
+              </div>
+              <div className="flex flex-col gap-4">
+                {[
+                  {
+                    title: "Imagen mas comercial",
+                    body: "La portada de escritorio ahora impulsa mejor tu marca y refuerza confianza visual.",
+                  },
+                  {
+                    title: "Control diario",
+                    body: "Consulta clientes, prestamos y pagos desde un mismo panel sin perder rapidez.",
+                  },
+                  {
+                    title: "Listo para cobrar",
+                    body: "Recibos claros, saldo pendiente visible y sesion persistente para trabajar sin friccion.",
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.title}
+                    className="rounded-[26px] border border-white/16 bg-white/10 p-5 backdrop-blur-sm"
+                  >
+                    <p className="text-sm font-black uppercase tracking-[0.18em] text-lime-100">
+                      {item.title}
+                    </p>
+                    <p className="mt-2 text-sm leading-7 text-white/85">{item.body}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="mt-7 grid gap-4 sm:grid-cols-3">
               {[
-                "Sesion persistente hasta cerrar manualmente",
-                "Recibos tipo ticket con saldo pendiente",
-                "Panel amplio en desktop y botones grandes en movil",
+                { label: "Sesion segura", value: "Abierta hasta cerrar manualmente" },
+                { label: "Recibos", value: "Formato ticket con saldo restante" },
+                { label: "Gestion", value: "Diseno amplio para trabajar en PC" },
               ].map((item) => (
                 <div
-                  key={item}
-                  className="rounded-3xl border border-white/12 bg-white/8 p-4 text-sm leading-6"
+                  key={item.label}
+                  className="rounded-3xl border border-white/12 bg-white/8 p-5 text-sm leading-6"
                 >
-                  {item}
+                  <p className="text-xs font-black uppercase tracking-[0.22em] text-lime-100/90">
+                    {item.label}
+                  </p>
+                  <p className="mt-2 text-base font-semibold text-white">{item.value}</p>
                 </div>
               ))}
+            </div>
+            <div className="mt-6 flex items-end justify-between gap-6 rounded-[28px] border border-white/12 bg-black/10 px-6 py-5">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.22em] text-white/70">
+                  Lo que resuelve la app
+                </p>
+                <p className="mt-2 max-w-xl text-base leading-7 text-white/88">
+                  Menos desorden al cobrar, mejor seguimiento por cliente y una presentacion
+                  mas fuerte cuando trabajas desde computador.
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-xs font-black uppercase tracking-[0.22em] text-white/60">
+                  Marca visible
+                </p>
+                <p className="mt-2 text-3xl font-black text-white">CB</p>
+              </div>
             </div>
           </div>
 
