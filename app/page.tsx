@@ -1060,14 +1060,7 @@ export default function Home() {
       <main className="min-h-screen px-4 py-10">
         <div className="mx-auto flex max-w-md flex-col gap-4 rounded-[28px] border border-white/50 bg-white/80 p-8 text-center shadow-2xl backdrop-blur">
           <div className="mx-auto overflow-hidden rounded-[22px] border border-white/60 bg-white p-2 shadow-lg">
-            <Image
-              src="/creditos-cb-hero-whatsapp.jpeg"
-              alt="Creditos rapidos, seguros y sin complicaciones"
-              width={96}
-              height={96}
-              priority
-              className="h-24 w-24 object-cover"
-            />
+            <Image src="/creditos-cb-logo.png" alt={BRAND_NAME} width={96} height={96} priority />
           </div>
           <h1 className="text-2xl font-black text-slate-900">{BRAND_NAME}</h1>
           <p className="text-sm text-slate-600">
@@ -1127,14 +1120,7 @@ export default function Home() {
             <div>
               <div className="mb-4 flex items-center gap-3">
                 <div className="overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm">
-                  <Image
-                    src="/creditos-cb-hero-whatsapp.jpeg"
-                    alt="Creditos rapidos, seguros y sin complicaciones"
-                    width={74}
-                    height={74}
-                    priority
-                    className="h-[74px] w-[74px] object-cover"
-                  />
+                  <Image src="/creditos-cb-logo.png" alt={BRAND_NAME} width={74} height={74} priority />
                 </div>
                 <div>
                   <p className="text-xs font-bold uppercase tracking-[0.28em] text-green-700">
@@ -1343,12 +1329,12 @@ export default function Home() {
               <div className="border-b border-dashed border-slate-300 pb-4 text-center">
                 <div className="mx-auto mb-3 overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm print:shadow-none">
                   <Image
-                    src="/creditos-cb-hero-whatsapp.jpeg"
-                    alt="Creditos rapidos, seguros y sin complicaciones"
+                    src="/creditos-cb-logo.png"
+                    alt={BRAND_NAME}
                     width={84}
                     height={84}
                     priority
-                    className="mx-auto h-[84px] w-[84px] object-cover"
+                    className="mx-auto"
                   />
                 </div>
                 <h3 className="text-xl font-black text-slate-900">{BRAND_NAME}</h3>
@@ -1426,14 +1412,7 @@ export default function Home() {
             <div>
               <div className="mb-2 flex items-center gap-3">
                 <div className="overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm">
-                  <Image
-                    src="/creditos-cb-hero-whatsapp.jpeg"
-                    alt="Creditos rapidos, seguros y sin complicaciones"
-                    width={76}
-                    height={76}
-                    priority
-                    className="h-[76px] w-[76px] object-cover"
-                  />
+                  <Image src="/creditos-cb-logo.png" alt={BRAND_NAME} width={76} height={76} priority />
                 </div>
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.3em] text-green-700">
