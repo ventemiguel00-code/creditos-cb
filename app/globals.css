@@ -107,3 +107,34 @@ textarea {
     radial-gradient(circle at bottom right, rgba(0, 184, 255, 0.24), transparent 26%),
     linear-gradient(135deg, rgba(16, 133, 47, 0.98), rgba(13, 95, 151, 0.96));
 }
+
+.receipt-sheet {
+  position: relative;
+}
+
+.receipt-sheet::before,
+.receipt-sheet::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--background);
+  transform: translateY(-50%);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.receipt-sheet::before {
+  left: -10px;
+}
+
+.receipt-sheet::after {
+  right: -10px;
+}
+
+@media print {
+  body {
+    background: white;
+  }
+}

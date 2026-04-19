@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { ChangeEvent, FormEvent, useEffect, useState, useTransition } from "react";
+import { ChangeEvent, FormEvent, useDeferredValue, useEffect, useState, useTransition } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   calculateLoanValues,
@@ -58,13 +58,12 @@ type LoanEditForm = {
   estado: string;
 };
 
-const LOCAL_ACCESS_KEY = "camilobm-local-access";
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
 const APP_CONFIG_TABLE = "configuracion_app";
 const APP_CONFIG_ROW_ID = "principal";
-const APP_USERNAME = process.env.NEXT_PUBLIC_APP_USERNAME ?? "CamiloBM";
-const APP_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD ?? "12345678";
 const SUPABASE_LOGIN_EMAIL = process.env.NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL ?? "";
+const SUPABASE_LOGIN_PASSWORD =
+  process.env.NEXT_PUBLIC_SUPABASE_LOGIN_PASSWORD ?? "12345678";
 const BRAND_NAME = "Creditos CB";
 
 function mapCliente(row: Record<string, unknown>): Cliente {
@@ -259,9 +258,10 @@ export default function Home() {
   const [capitalStorageMode, setCapitalStorageMode] = useState<"supabase" | "local">("local");
   const [loanEditForm, setLoanEditForm] = useState<LoanEditForm | null>(null);
   const [loginForm, setLoginForm] = useState({
-    usuario: APP_USERNAME,
-    clave: APP_PASSWORD,
+    usuario: "",
+    clave: "",
   });
+  const [clientSearch, setClientSearch] = useState("");
   const [clientForm, setClientForm] = useState({
     nombre: "",
     direccion: "",
@@ -278,13 +278,24 @@ export default function Home() {
     prestamoId: "",
   });
   const [isPending, startTransition] = useTransition();
+  const deferredClientSearch = useDeferredValue(clientSearch);
 
   useEffect(() => {
     let isMounted = true;
 
     const bootstrap = async () => {
-      const accessGranted = window.localStorage.getItem(LOCAL_ACCESS_KEY) === "true";
-      const { data } = await supabase.auth.getSession();
+      const [sessionResponse, supabaseSessionResponse] = await Promise.all([
+        fetch("/api/auth/session", {
+          credentials: "include",
+          cache: "no-store",
+        }),
+        supabase.auth.getSession(),
+      ]);
+      const sessionPayload = (await sessionResponse.json().catch(() => ({
+        authenticated: false,
+      }))) as { authenticated?: boolean };
+      const accessGranted = sessionPayload.authenticated === true;
+      const { data } = supabaseSessionResponse;
 
       if (!isMounted) {
         return;
@@ -329,7 +340,7 @@ export default function Home() {
         setAuthStatus("signed_out");
       }
 
-      if (session && window.localStorage.getItem(LOCAL_ACCESS_KEY) === "true") {
+      if (session) {
         setAuthStatus("signed_in");
       }
     });
@@ -352,7 +363,7 @@ export default function Home() {
     if (SUPABASE_LOGIN_EMAIL) {
       const { data: loginData, error } = await supabase.auth.signInWithPassword({
         email: SUPABASE_LOGIN_EMAIL,
-        password: APP_PASSWORD,
+        password: SUPABASE_LOGIN_PASSWORD,
       });
 
       if (error) {
@@ -426,17 +437,25 @@ export default function Home() {
     event.preventDefault();
     setAuthMessage("");
 
-    if (
-      loginForm.usuario.trim().toLowerCase() !== APP_USERNAME.toLowerCase() ||
-      loginForm.clave !== APP_PASSWORD
-    ) {
-      setAuthMessage("Usuario o clave incorrectos.");
-      return;
-    }
-
     try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          username: loginForm.usuario,
+          password: loginForm.clave,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(payload?.message ?? "No fue posible iniciar sesion.");
+      }
+
       await initializeSupabaseAccess();
-      window.localStorage.setItem(LOCAL_ACCESS_KEY, "true");
       setAuthStatus("signed_in");
       await loadData();
     } catch (error) {
@@ -445,7 +464,10 @@ export default function Home() {
   }
 
   async function handleLogout() {
-    window.localStorage.removeItem(LOCAL_ACCESS_KEY);
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
     await supabase.auth.signOut();
     setClientes([]);
     setPrestamos([]);
@@ -831,6 +853,17 @@ export default function Home() {
   const totalRecaudado = pagos.reduce((sum, pago) => sum + pago.monto, 0);
   const initialCapital = Math.max(Number(initialCapitalInput || 0), 0);
   const capitalDisponible = Math.max(initialCapital - capitalPrestado + totalRecaudado, 0);
+  const normalizedClientSearch = deferredClientSearch.trim().toLowerCase();
+  const visibleClientes = clientes.filter((cliente) => {
+    if (!normalizedClientSearch) {
+      return true;
+    }
+
+    return [cliente.nombre, cliente.telefono, cliente.correo, cliente.direccion]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedClientSearch);
+  });
 
   if (authStatus === "loading") {
     return (
@@ -925,7 +958,7 @@ export default function Home() {
                   setLoginForm((current) => ({ ...current, usuario: event.target.value }))
                 }
                 className="h-14 rounded-2xl border border-slate-200 bg-white px-4 outline-none ring-0 transition focus:border-green-500"
-                placeholder="CamiloBM"
+                placeholder="Tu usuario"
               />
             </label>
 
@@ -938,7 +971,7 @@ export default function Home() {
                   setLoginForm((current) => ({ ...current, clave: event.target.value }))
                 }
                 className="h-14 rounded-2xl border border-slate-200 bg-white px-4 outline-none ring-0 transition focus:border-green-500"
-                placeholder="********"
+                placeholder="Tu clave"
               />
             </label>
 
@@ -956,9 +989,8 @@ export default function Home() {
             </button>
 
             <div className="rounded-2xl bg-yellow-50 px-4 py-3 text-xs leading-5 text-yellow-900">
-              Si luego deseas autenticar contra un usuario real de Supabase, completa
-              <code> NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL </code>. Mientras tanto, la app
-              usa tu acceso local y el cliente publico de Supabase.
+              El acceso ahora se valida desde el servidor y mantiene una cookie segura para
+              que la sesion permanezca abierta hasta cerrar manualmente.
             </div>
           </form>
         </section>
@@ -1103,7 +1135,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="mx-auto max-w-sm rounded-[28px] border border-dashed border-slate-300 bg-white p-5 shadow-sm print:max-w-full print:border-none print:shadow-none">
+            <div className="receipt-sheet mx-auto max-w-sm rounded-[30px] border border-dashed border-slate-300 bg-white p-5 shadow-sm print:max-w-full print:border-none print:shadow-none">
               <div className="border-b border-dashed border-slate-300 pb-4 text-center">
                 <div className="mx-auto mb-3 overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm print:shadow-none">
                   <Image
@@ -1119,7 +1151,8 @@ export default function Home() {
                 <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Recibo de pago</p>
               </div>
 
-              <div className="py-4 text-center">
+              <div className="relative py-4 text-center">
+                <div className="pointer-events-none absolute left-0 top-1/2 h-px w-full -translate-y-1/2 border-t border-dashed border-slate-200" />
                 {receiptData.cliente.fotoUrl ? (
                   <Image
                     src={receiptData.cliente.fotoUrl}
@@ -1130,7 +1163,7 @@ export default function Home() {
                     className="mx-auto h-[92px] w-[92px] rounded-full border-4 border-green-100 object-cover"
                   />
                 ) : null}
-                <p className="mt-3 text-xl font-black text-slate-900">
+                <p className="relative mt-3 text-xl font-black text-slate-900">
                   {receiptData.cliente.nombre}
                 </p>
               </div>
@@ -1183,6 +1216,7 @@ export default function Home() {
           </section>
         ) : null}
 
+        <div className={receiptData ? "print:hidden" : ""}>
         <header className="glass-panel rounded-[28px] p-4 sm:p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -1661,19 +1695,27 @@ export default function Home() {
                     Agenda visual
                   </h2>
                 </div>
+                <div className="w-full max-w-xs">
+                  <input
+                    value={clientSearch}
+                    onChange={(event) => setClientSearch(event.target.value)}
+                    placeholder="Buscar cliente, telefono o direccion"
+                    className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-green-500"
+                  />
+                </div>
               </div>
 
               <div className="hide-scrollbar flex gap-3 overflow-x-auto pb-1 lg:grid lg:max-h-[360px] lg:grid-cols-1 lg:overflow-y-auto">
-                {clientes.length === 0 ? (
+                {visibleClientes.length === 0 ? (
                   <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
-                    Aun no hay clientes registrados.
+                    No se encontraron clientes con ese criterio.
                   </div>
                 ) : null}
 
-                {clientes.map((cliente) => (
+                {visibleClientes.map((cliente) => (
                   <article
                     key={cliente.id}
-                    className="min-w-[260px] rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                    className="min-w-[280px] rounded-[26px] border border-white/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(244,252,247,0.88))] p-4 shadow-sm"
                   >
                     <div className="flex items-center gap-3">
                       <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100">
@@ -1700,7 +1742,17 @@ export default function Home() {
                         <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
                       </div>
                     </div>
-                    <p className="mt-4 text-sm leading-6 text-slate-600">{cliente.direccion}</p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <span className="rounded-full bg-green-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-green-700">
+                        Cliente activo
+                      </span>
+                      <span className="rounded-full bg-sky-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-sky-700">
+                        {formatShortDate(cliente.createdAt)}
+                      </span>
+                    </div>
+                    <p className="mt-4 rounded-[20px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+                      {cliente.direccion}
+                    </p>
                     <button
                       type="button"
                       onClick={() => handleDeleteClient(cliente)}
@@ -2043,6 +2095,7 @@ export default function Home() {
             </article>
           </section>
         )}
+        </div>
       </div>
     </main>
   );
