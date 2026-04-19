@@ -1094,43 +1094,43 @@ export default function Home() {
               Muestra una imagen mas fuerte de tu negocio mientras administras clientes,
               prestamos, pagos, recibos y saldo restante desde un panel claro y rapido.
             </p>
-            <div className="mt-6 grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
-              <div className="overflow-hidden rounded-[28px] border border-white/30 bg-white/10 p-3 backdrop-blur">
+            <div className="mt-6 overflow-hidden rounded-[30px] border border-white/30 bg-white/10 p-3 backdrop-blur">
+              <div className="rounded-[24px] border border-white/15 bg-white/95 p-3 shadow-[0_24px_70px_rgba(7,61,93,0.2)]">
                 <Image
                   src="/creditos-cb-hero-whatsapp.jpeg"
                   alt="Creditos rapidos, seguros y sin complicaciones"
                   width={1152}
                   height={768}
                   priority
-                  className="h-auto w-full rounded-[20px] object-cover"
+                  className="h-auto max-h-[460px] w-full rounded-[20px] object-contain"
                 />
               </div>
-              <div className="flex flex-col gap-4">
-                {[
-                  {
-                    title: "Imagen mas comercial",
-                    body: "La portada de escritorio ahora impulsa mejor tu marca y refuerza confianza visual.",
-                  },
-                  {
-                    title: "Control diario",
-                    body: "Consulta clientes, prestamos y pagos desde un mismo panel sin perder rapidez.",
-                  },
-                  {
-                    title: "Listo para cobrar",
-                    body: "Recibos claros, saldo pendiente visible y sesion persistente para trabajar sin friccion.",
-                  },
-                ].map((item) => (
-                  <div
-                    key={item.title}
-                    className="rounded-[26px] border border-white/16 bg-white/10 p-5 backdrop-blur-sm"
-                  >
-                    <p className="text-sm font-black uppercase tracking-[0.18em] text-lime-100">
-                      {item.title}
-                    </p>
-                    <p className="mt-2 text-sm leading-7 text-white/85">{item.body}</p>
-                  </div>
-                ))}
-              </div>
+            </div>
+            <div className="mt-5 grid gap-4 xl:grid-cols-3">
+              {[
+                {
+                  title: "Imagen mas comercial",
+                  body: "La portada de escritorio impulsa mejor tu marca y refuerza confianza visual desde el primer vistazo.",
+                },
+                {
+                  title: "Control diario",
+                  body: "Consulta clientes, prestamos y pagos desde un mismo panel sin perder rapidez al trabajar en PC.",
+                },
+                {
+                  title: "Listo para cobrar",
+                  body: "Recibos claros, saldo pendiente visible y sesion persistente para trabajar sin friccion.",
+                },
+              ].map((item) => (
+                <div
+                  key={item.title}
+                  className="rounded-[26px] border border-white/16 bg-white/10 p-5 backdrop-blur-sm"
+                >
+                  <p className="text-sm font-black uppercase tracking-[0.18em] text-lime-100">
+                    {item.title}
+                  </p>
+                  <p className="mt-2 text-sm leading-7 text-white/85">{item.body}</p>
+                </div>
+              ))}
             </div>
             <div className="mt-7 grid gap-4 sm:grid-cols-3">
               {[
