@@ -2003,19 +2003,6 @@ export default function Home() {
                 cuotas, mantiene el saldo restante y deja la sesion abierta hasta cerrar
                 manualmente.
               </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("resumen")}
-                  className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-                    activeTab === "resumen"
-                      ? "brand-button text-white"
-                      : "border border-slate-200 bg-white text-slate-700"
-                  }`}
-                >
-                  Resumen
-                </button>
-              </div>
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row">
