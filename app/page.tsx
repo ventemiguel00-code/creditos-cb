@@ -32,6 +32,7 @@ type Prestamo = {
   clienteId: string;
   montoCapital: number;
   numeroCuotas: number;
+  frecuenciaPago: PaymentFrequency;
   porcentajeInteres: number;
   totalCobrar: number;
   valorCuota: number;
@@ -61,17 +62,39 @@ type LoanEditForm = {
   clienteId: string;
   montoCapital: string;
   numeroCuotas: string;
+  frecuenciaPago: PaymentFrequency;
   estado: string;
 };
 
+type PaymentFrequency = "diaria" | "semanal" | "quincenal" | "mensual";
+
+type LoanMetadata = Record<
+  string,
+  {
+    frecuenciaPago: PaymentFrequency;
+  }
+>;
+
+type ProfitPeriod = "diario" | "semanal" | "quincenal" | "mensual";
+
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
 const LAST_CLEANUP_RUN_KEY = "creditos-cb-last-cleanup-run";
+const LOAN_METADATA_KEY = "creditos-cb-loan-metadata";
+const PROFIT_DISTRIBUTION_KEY = "creditos-cb-profit-distribution";
 const APP_CONFIG_TABLE = "configuracion_app";
 const APP_CONFIG_ROW_ID = "principal";
 const SUPABASE_LOGIN_EMAIL = process.env.NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL ?? "";
 const SUPABASE_LOGIN_PASSWORD =
   process.env.NEXT_PUBLIC_SUPABASE_LOGIN_PASSWORD ?? "12345678";
 const BRAND_NAME = "Creditos CB";
+const BUSINESS_PHONE = "3122398133";
+const PAYMENT_FREQUENCIES: PaymentFrequency[] = [
+  "diaria",
+  "semanal",
+  "quincenal",
+  "mensual",
+];
+const CLOSED_PERCENTAGE_OPTIONS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
 
 function mapCliente(row: Record<string, unknown>): Cliente {
   return {
@@ -92,6 +115,115 @@ function mapCliente(row: Record<string, unknown>): Cliente {
   };
 }
 
+function normalizePaymentFrequency(value: unknown): PaymentFrequency {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (normalized === "diaria" || normalized === "diario") {
+    return "diaria";
+  }
+
+  if (normalized === "semanal" || normalized === "semana") {
+    return "semanal";
+  }
+
+  if (normalized === "quincenal" || normalized === "15nal" || normalized === "quince") {
+    return "quincenal";
+  }
+
+  if (normalized === "mensual" || normalized === "mes") {
+    return "mensual";
+  }
+
+  return "diaria";
+}
+
+function normalizeClosedPercentage(value: unknown) {
+  const parsed = Number(value ?? 0);
+
+  if (CLOSED_PERCENTAGE_OPTIONS.includes(parsed)) {
+    return parsed;
+  }
+
+  if (parsed <= 10) {
+    return 10;
+  }
+
+  if (parsed >= 100) {
+    return 100;
+  }
+
+  const nearest = CLOSED_PERCENTAGE_OPTIONS.reduce((current, option) =>
+    Math.abs(option - parsed) < Math.abs(current - parsed) ? option : current,
+  );
+
+  return nearest;
+}
+
+function readLoanMetadata(): LoanMetadata {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(LOAN_METADATA_KEY);
+
+    if (!raw) {
+      return {};
+    }
+
+    return JSON.parse(raw) as LoanMetadata;
+  } catch {
+    return {};
+  }
+}
+
+function saveLoanMetadata(metadata: LoanMetadata) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(LOAN_METADATA_KEY, JSON.stringify(metadata));
+}
+
+function readProfitDistribution() {
+  if (typeof window === "undefined") {
+    return {
+      empresaPorcentaje: "50",
+      personalPorcentaje: "50",
+    };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PROFIT_DISTRIBUTION_KEY);
+
+    if (!raw) {
+      return {
+        empresaPorcentaje: "50",
+        personalPorcentaje: "50",
+      };
+    }
+
+    const parsed = JSON.parse(raw) as {
+      empresaPorcentaje?: string;
+      personalPorcentaje?: string;
+    };
+
+    const empresa = normalizeClosedPercentage(parsed.empresaPorcentaje ?? "50");
+
+    return {
+      empresaPorcentaje: String(empresa),
+      personalPorcentaje: String(100 - empresa),
+    };
+  } catch {
+    return {
+      empresaPorcentaje: "50",
+      personalPorcentaje: "50",
+    };
+  }
+}
+
 function mapPrestamo(row: Record<string, unknown>): Prestamo {
   const totalCobrar = Number(row.total_a_pagar ?? row.total_cobrar ?? row.total ?? 0);
   const montoCapital = Number(row.monto_prestado ?? row.monto_capital ?? row.capital ?? 0);
@@ -106,6 +238,9 @@ function mapPrestamo(row: Record<string, unknown>): Prestamo {
     clienteId: String(row.cliente_id ?? ""),
     montoCapital,
     numeroCuotas: Number(row.numero_cuotas ?? row.cuotas ?? 0),
+    frecuenciaPago: normalizePaymentFrequency(
+      row.frecuencia_pago ?? row.frecuencia ?? row.modalidad_pago ?? row.tipo_cobro,
+    ),
     porcentajeInteres: roundCurrency(porcentajeInteres),
     totalCobrar,
     valorCuota: Number(row.valor_cuota ?? row.cuota_valor ?? 0),
@@ -187,6 +322,76 @@ function getLoanStatusLabel(prestamo: Prestamo) {
   return prestamo.saldoRestante <= 0 ? "Pago de prestamo completado" : "Al dia";
 }
 
+function getPaymentFrequencyLabel(frecuenciaPago: PaymentFrequency) {
+  switch (frecuenciaPago) {
+    case "diaria":
+      return "Diaria";
+    case "semanal":
+      return "Semanal";
+    case "quincenal":
+      return "Quincenal";
+    case "mensual":
+      return "Mensual";
+    default:
+      return "Diaria";
+  }
+}
+
+function isPaymentInsidePeriod(dateValue: string, period: ProfitPeriod) {
+  const today = new Date();
+  const date = new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  if (period === "diario") {
+    return (
+      date.getFullYear() === today.getFullYear() &&
+      date.getMonth() === today.getMonth() &&
+      date.getDate() === today.getDate()
+    );
+  }
+
+  const diffMs = today.getTime() - date.getTime();
+  const dayMs = 1000 * 60 * 60 * 24;
+
+  if (period === "semanal") {
+    return diffMs <= dayMs * 7;
+  }
+
+  if (period === "quincenal") {
+    return diffMs <= dayMs * 15;
+  }
+
+  return diffMs <= dayMs * 30;
+}
+
+function getPeriodLabel(period: ProfitPeriod) {
+  switch (period) {
+    case "diario":
+      return "hoy";
+    case "semanal":
+      return "ultimos 7 dias";
+    case "quincenal":
+      return "ultimos 15 dias";
+    case "mensual":
+      return "ultimos 30 dias";
+    default:
+      return "periodo";
+  }
+}
+
+function formatReceiptField(value: string | number | null | undefined) {
+  const normalized = typeof value === "string" ? value.trim() : value;
+
+  if (normalized === "" || normalized === null || normalized === undefined) {
+    return "--";
+  }
+
+  return String(normalized);
+}
+
 async function selectTableData(table: "clientes" | "prestamos" | "pagos") {
   const timestampColumns =
     table === "clientes"
@@ -254,7 +459,7 @@ export default function Home() {
   const [pagos, setPagos] = useState<Pago[]>([]);
   const [photoPreview, setPhotoPreview] = useState("");
   const [activeTab, setActiveTab] = useState<
-    "resumen" | "clientes" | "prestamos" | "pagos" | "configuracion"
+    "resumen" | "ganancias" | "clientes" | "prestamos" | "pagos" | "configuracion"
   >("resumen");
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
   const [initialCapitalInput, setInitialCapitalInput] = useState(() => {
@@ -286,8 +491,12 @@ export default function Home() {
     clienteId: "",
     montoCapital: "",
     numeroCuotas: "",
+    frecuenciaPago: "diaria" as PaymentFrequency,
     porcentajeInteres: "20",
   });
+  const [loanMetadata, setLoanMetadata] = useState<LoanMetadata>({});
+  const [profitPeriod, setProfitPeriod] = useState<ProfitPeriod>("semanal");
+  const [profitDistribution, setProfitDistribution] = useState(() => readProfitDistribution());
   const [paymentForm, setPaymentForm] = useState({
     prestamoId: "",
   });
@@ -295,6 +504,11 @@ export default function Home() {
   const [isDownloadingExcel, setIsDownloadingExcel] = useState(false);
   const [isCleaningHistory, setIsCleaningHistory] = useState(false);
   const deferredClientSearch = useDeferredValue(clientSearch);
+
+  useEffect(() => {
+    setLoanMetadata(readLoanMetadata());
+    setProfitDistribution(readProfitDistribution());
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -426,6 +640,7 @@ export default function Home() {
 
   async function loadData() {
     setScreenMessage("");
+    const storedLoanMetadata = readLoanMetadata();
 
     const [clientesResponse, prestamosResponse, pagosResponse, initialCapitalResponse] = await Promise.all([
       selectTableData("clientes"),
@@ -448,7 +663,12 @@ export default function Home() {
 
     const pagosMapped = (pagosResponse.data ?? []).map((row) => mapPago(row));
     const prestamosMapped = (prestamosResponse.data ?? []).map((row) => {
-      const prestamo = mapPrestamo(row);
+      const prestamoBase = mapPrestamo(row);
+      const prestamo = {
+        ...prestamoBase,
+        frecuenciaPago:
+          storedLoanMetadata[String(row.id ?? "")]?.frecuenciaPago ?? prestamoBase.frecuenciaPago,
+      };
       const pagosPrestamo = pagosMapped.filter((pago) => pago.prestamoId === prestamo.id);
       const totalPagado = roundCurrency(
         pagosPrestamo.reduce((sum, pago) => sum + pago.monto, 0),
@@ -466,6 +686,7 @@ export default function Home() {
     setClientes((clientesResponse.data ?? []).map((row) => mapCliente(row)));
     setPrestamos(prestamosMapped);
     setPagos(pagosMapped);
+    setLoanMetadata(storedLoanMetadata);
     setInitialCapitalInput(String(initialCapitalResponse.value));
     setCapitalStorageMode(initialCapitalResponse.source);
   }
@@ -743,6 +964,7 @@ export default function Home() {
       const capital = Number(loanForm.montoCapital);
       const numeroCuotas = Number(loanForm.numeroCuotas);
       const porcentajeInteres = Number(loanForm.porcentajeInteres);
+      const frecuenciaPago = normalizePaymentFrequency(loanForm.frecuenciaPago);
 
       if (!loanForm.clienteId || capital <= 0 || numeroCuotas <= 0 || porcentajeInteres < 0) {
         throw new Error(
@@ -758,16 +980,52 @@ export default function Home() {
         estado: "activo",
       };
 
-      const { error } = await supabase.from("prestamos").insert(payload);
+      const payloads = [
+        { ...payload, frecuencia_pago: frecuenciaPago },
+        { ...payload, frecuencia: frecuenciaPago },
+        { ...payload, modalidad_pago: frecuenciaPago },
+        payload,
+      ];
 
-      if (error) {
-        throw error;
+      let createdLoanId = "";
+      let lastError: Error | null = null;
+
+      for (const currentPayload of payloads) {
+        const response = await supabase.from("prestamos").insert(currentPayload).select("*").single();
+
+        if (!response.error) {
+          createdLoanId = String(response.data?.id ?? "");
+          lastError = null;
+          break;
+        }
+
+        lastError = response.error;
+
+        if (!isSchemaColumnError(response.error.message)) {
+          throw response.error;
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+
+      if (createdLoanId) {
+        const nextMetadata = {
+          ...readLoanMetadata(),
+          [createdLoanId]: {
+            frecuenciaPago,
+          },
+        };
+        saveLoanMetadata(nextMetadata);
+        setLoanMetadata(nextMetadata);
       }
 
       setLoanForm({
         clienteId: "",
         montoCapital: "",
         numeroCuotas: "",
+        frecuenciaPago: "diaria",
         porcentajeInteres: "20",
       });
       await loadData();
@@ -813,6 +1071,41 @@ export default function Home() {
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
     }
+  }
+
+  function handleSaveProfitDistribution() {
+    const empresa = normalizeClosedPercentage(profitDistribution.empresaPorcentaje || 50);
+    const personal = 100 - empresa;
+
+    const nextDistribution = {
+      empresaPorcentaje: String(empresa),
+      personalPorcentaje: String(personal),
+    };
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(PROFIT_DISTRIBUTION_KEY, JSON.stringify(nextDistribution));
+    }
+
+    setProfitDistribution(nextDistribution);
+    setScreenMessage("Reparto de ganancias actualizado correctamente.");
+  }
+
+  function handleCompanyPercentageChange(value: string) {
+    const empresa = normalizeClosedPercentage(value);
+
+    setProfitDistribution({
+      empresaPorcentaje: String(empresa),
+      personalPorcentaje: String(100 - empresa),
+    });
+  }
+
+  function handlePersonalPercentageChange(value: string) {
+    const personal = normalizeClosedPercentage(value);
+
+    setProfitDistribution({
+      empresaPorcentaje: String(100 - personal),
+      personalPorcentaje: String(personal),
+    });
   }
 
   async function handleRegisterPayment(event: FormEvent<HTMLFormElement>) {
@@ -887,6 +1180,51 @@ export default function Home() {
     }
   }
 
+  function handleOpenReceiptFromPayment(pago: Pago) {
+    const prestamo = prestamos.find((item) => item.id === pago.prestamoId);
+
+    if (!prestamo) {
+      setScreenMessage("No se encontro el prestamo relacionado con ese pago.");
+      return;
+    }
+
+    const cliente = clientes.find((item) => item.id === prestamo.clienteId);
+
+    if (!cliente) {
+      setScreenMessage("No se encontro el cliente relacionado con ese pago.");
+      return;
+    }
+
+    const pagosPrestamo = pagos
+      .filter((item) => item.prestamoId === prestamo.id)
+      .sort((left, right) => {
+        if (left.cuotaNumero !== right.cuotaNumero) {
+          return left.cuotaNumero - right.cuotaNumero;
+        }
+
+        return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      });
+
+    const totalPagadoHastaRecibo = roundCurrency(
+      pagosPrestamo
+        .filter((item) => item.cuotaNumero <= pago.cuotaNumero)
+        .reduce((sum, item) => sum + item.monto, 0),
+    );
+    const saldoRestante = roundCurrency(Math.max(prestamo.totalCobrar - totalPagadoHastaRecibo, 0));
+
+    setReceiptData({
+      cliente,
+      pago,
+      prestamo: {
+        ...prestamo,
+        cuotasPagadas: Math.max(pago.cuotaNumero, 0),
+        saldoRestante,
+        estado: saldoRestante <= 0 ? "pagado" : prestamo.estado,
+      },
+    });
+    setScreenMessage("Recibo recuperado desde el historial.");
+  }
+
   async function handleDeleteClient(cliente: Cliente) {
     const confirmed = window.confirm(
       `Vas a borrar a ${cliente.nombre}. Esta accion no se puede deshacer.`,
@@ -924,6 +1262,11 @@ export default function Home() {
         if (prestamoDeleteError) {
           throw prestamoDeleteError;
         }
+
+        const nextMetadata = { ...readLoanMetadata() };
+        delete nextMetadata[prestamo.id];
+        saveLoanMetadata(nextMetadata);
+        setLoanMetadata(nextMetadata);
       }
 
       const { error } = await supabase.from("clientes").delete().eq("id", cliente.id);
@@ -945,6 +1288,7 @@ export default function Home() {
       clienteId: prestamo.clienteId,
       montoCapital: String(prestamo.montoCapital),
       numeroCuotas: String(prestamo.numeroCuotas),
+      frecuenciaPago: prestamo.frecuenciaPago,
       estado: prestamo.estado,
     });
   }
@@ -961,27 +1305,64 @@ export default function Home() {
     try {
       const montoPrestado = Number(loanEditForm.montoCapital);
       const numeroCuotas = Number(loanEditForm.numeroCuotas);
+      const frecuenciaPago = normalizePaymentFrequency(loanEditForm.frecuenciaPago);
 
       if (!loanEditForm.clienteId || montoPrestado <= 0 || numeroCuotas <= 0) {
         throw new Error("Debes completar cliente, monto y cuotas validas.");
       }
 
-      const { error } = await supabase
-        .from("prestamos")
-        .update({
-          cliente_id: loanEditForm.clienteId,
-          monto_prestado: montoPrestado,
-          numero_cuotas: numeroCuotas,
-          estado: loanEditForm.estado || "activo",
-        })
-        .eq("id", loanEditForm.prestamoId);
+      const payload = {
+        cliente_id: loanEditForm.clienteId,
+        monto_prestado: montoPrestado,
+        numero_cuotas: numeroCuotas,
+        estado: loanEditForm.estado || "activo",
+      };
 
-      if (error) {
-        throw error;
+      const payloads = [
+        { ...payload, frecuencia_pago: frecuenciaPago },
+        { ...payload, frecuencia: frecuenciaPago },
+        { ...payload, modalidad_pago: frecuenciaPago },
+        payload,
+      ];
+
+      let lastError: Error | null = null;
+
+      for (const currentPayload of payloads) {
+        const response = await supabase
+          .from("prestamos")
+          .update(currentPayload)
+          .eq("id", loanEditForm.prestamoId);
+
+        if (!response.error) {
+          lastError = null;
+          break;
+        }
+
+        lastError = response.error;
+
+        if (!isSchemaColumnError(response.error.message)) {
+          throw response.error;
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+
+      const nextMetadata = {
+        ...readLoanMetadata(),
+        [loanEditForm.prestamoId]: {
+          frecuenciaPago,
+        },
+      };
+      saveLoanMetadata(nextMetadata);
+      setLoanMetadata(nextMetadata);
+
+      if (loanEditForm) {
+        setLoanEditForm(null);
       }
 
       await loadData();
-      setLoanEditForm(null);
       setScreenMessage("Prestamo actualizado correctamente.");
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
@@ -1017,6 +1398,11 @@ export default function Home() {
         throw error;
       }
 
+      const nextMetadata = { ...readLoanMetadata() };
+      delete nextMetadata[prestamo.id];
+      saveLoanMetadata(nextMetadata);
+      setLoanMetadata(nextMetadata);
+
       await loadData();
       setScreenMessage("Prestamo eliminado correctamente.");
     } catch (error) {
@@ -1034,6 +1420,35 @@ export default function Home() {
     0,
   );
   const totalRecaudado = pagos.reduce((sum, pago) => sum + pago.monto, 0);
+  const empresaPorcentaje = normalizeClosedPercentage(profitDistribution.empresaPorcentaje || 50);
+  const personalPorcentaje = 100 - empresaPorcentaje;
+  const pagosConGanancia = pagos.map((pago) => {
+    const prestamo = prestamos.find((item) => item.id === pago.prestamoId);
+    const gananciaPago = prestamo
+      ? roundCurrency(
+          pago.monto *
+            Math.max(prestamo.totalCobrar - prestamo.montoCapital, 0) /
+            Math.max(prestamo.totalCobrar, 1),
+        )
+      : 0;
+
+    return {
+      ...pago,
+      gananciaPago,
+    };
+  });
+  const gananciaCobradaTotal = roundCurrency(
+    pagosConGanancia.reduce((sum, pago) => sum + pago.gananciaPago, 0),
+  );
+  const gananciaPeriodo = roundCurrency(
+    pagosConGanancia
+      .filter((pago) => isPaymentInsidePeriod(pago.createdAt, profitPeriod))
+      .reduce((sum, pago) => sum + pago.gananciaPago, 0),
+  );
+  const gananciaPeriodoEmpresa = roundCurrency((gananciaPeriodo * empresaPorcentaje) / 100);
+  const gananciaPeriodoPersonal = roundCurrency((gananciaPeriodo * personalPorcentaje) / 100);
+  const gananciaTotalEmpresa = roundCurrency((gananciaCobradaTotal * empresaPorcentaje) / 100);
+  const gananciaTotalPersonal = roundCurrency((gananciaCobradaTotal * personalPorcentaje) / 100);
   const initialCapital = Math.max(Number(initialCapitalInput || 0), 0);
   const capitalDisponible = Math.max(initialCapital - capitalPrestado + totalRecaudado, 0);
   const normalizedClientSearch = deferredClientSearch.trim().toLowerCase();
@@ -1052,6 +1467,7 @@ export default function Home() {
     { id: "clientes", label: "Clientes" },
     { id: "prestamos", label: "Prestamos" },
     { id: "pagos", label: "Pagos" },
+    { id: "ganancias", label: "Ganancias" },
     { id: "configuracion", label: "Configuracion" },
   ] as const;
 
@@ -1332,6 +1748,30 @@ export default function Home() {
                 />
               </label>
 
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Frecuencia de pago</span>
+                <select
+                  value={loanEditForm.frecuenciaPago}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            frecuenciaPago: normalizePaymentFrequency(event.target.value),
+                          }
+                        : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                >
+                  {PAYMENT_FREQUENCIES.map((frecuencia) => (
+                    <option key={frecuencia} value={frecuencia}>
+                      {getPaymentFrequencyLabel(frecuencia)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <div className="md:col-span-2 flex flex-wrap gap-3">
                 <button
                   type="submit"
@@ -1380,83 +1820,160 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="receipt-sheet mx-auto max-w-sm rounded-[30px] border border-dashed border-slate-300 bg-white p-5 shadow-sm print:max-w-full print:border-none print:shadow-none">
-              <div className="border-b border-dashed border-slate-300 pb-4 text-center">
-                <div className="mx-auto mb-3 overflow-hidden rounded-[18px] border border-lime-200 bg-white p-1 shadow-sm print:shadow-none">
-                  <Image
-                    src="/creditos-cb-logo.png"
-                    alt={BRAND_NAME}
-                    width={84}
-                    height={84}
-                    priority
-                    className="mx-auto"
-                  />
-                </div>
-                <h3 className="text-xl font-black text-slate-900">{BRAND_NAME}</h3>
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Recibo de pago</p>
-              </div>
+            <div className="receipt-sheet mx-auto max-w-2xl rounded-[30px] border border-dashed border-slate-300 bg-white p-5 shadow-sm print:max-w-full print:border-none print:shadow-none">
+              {(() => {
+                const totalPagado = roundCurrency(
+                  pagos
+                    .filter(
+                      (pago) =>
+                        pago.prestamoId === receiptData.prestamo.id &&
+                        pago.cuotaNumero <= receiptData.pago.cuotaNumero,
+                    )
+                    .reduce((sum, pago) => sum + pago.monto, 0),
+                );
+                const saldoEnCuotas = Math.max(
+                  receiptData.prestamo.numeroCuotas - receiptData.pago.cuotaNumero,
+                  0,
+                );
+                const creditosEnDia =
+                  receiptData.prestamo.saldoRestante <= 0 ? "Prestamo completado" : "Al dia";
+                const atrasos = creditosEnDia === "Al dia" ? "0" : "--";
 
-              <div className="relative py-4 text-center">
-                <div className="pointer-events-none absolute left-0 top-1/2 h-px w-full -translate-y-1/2 border-t border-dashed border-slate-200" />
-                {receiptData.cliente.fotoUrl ? (
-                  <Image
-                    src={receiptData.cliente.fotoUrl}
-                    alt={receiptData.cliente.nombre}
-                    width={92}
-                    height={92}
-                    unoptimized
-                    className="mx-auto h-[92px] w-[92px] rounded-full border-4 border-green-100 object-cover"
-                  />
-                ) : null}
-                <p className="relative mt-3 text-xl font-black text-slate-900">
-                  {receiptData.cliente.nombre}
-                </p>
-              </div>
+                return (
+                  <>
+                    <div className="grid gap-0 overflow-hidden rounded-[24px] border border-slate-300">
+                      <div className="border-b border-slate-300 bg-white p-3 text-center">
+                        <div className="overflow-hidden rounded-[14px] border border-lime-200 bg-white px-1 py-1 shadow-sm print:shadow-none">
+                          <Image
+                            src="/creditos-cb-logo.png"
+                            alt={BRAND_NAME}
+                            width={720}
+                            height={240}
+                            priority
+                            className="mx-auto h-[170px] w-full scale-[1.8] object-contain"
+                          />
+                        </div>
+                        <p className="mt-2 text-xs uppercase tracking-[0.24em] text-slate-500">
+                          Recibo de pago
+                        </p>
+                      </div>
 
-              <div className="grid gap-2 text-sm text-slate-700">
-                <div className="flex items-center justify-between gap-3">
-                  <span>Fecha</span>
-                  <strong>{formatDate(receiptData.pago.createdAt)}</strong>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span>Cuota</span>
-                  <strong>
-                    #{receiptData.pago.cuotaNumero} de {receiptData.prestamo.numeroCuotas}
-                  </strong>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span>Capital</span>
-                  <strong>{formatCurrency(receiptData.prestamo.montoCapital)}</strong>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span>Interes</span>
-                  <strong>{receiptData.prestamo.porcentajeInteres}%</strong>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span>Total a cobrar</span>
-                  <strong>{formatCurrency(receiptData.prestamo.totalCobrar)}</strong>
-                </div>
-              </div>
+                      <div className="border-b border-slate-300 px-3 py-2 text-sm">
+                        <span className="font-black text-slate-900">Fecha:</span>{" "}
+                        {formatDate(receiptData.pago.createdAt)}
+                      </div>
 
-              <div className="mt-4 rounded-[20px] border border-green-200 bg-green-50 p-4 text-center">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-green-700">
-                  Valor del pago
-                </p>
-                <p className="mt-2 text-3xl font-black text-green-900">
-                  {formatCurrency(receiptData.pago.monto)}
-                </p>
-              </div>
+                      <div className="border-b border-slate-300 px-3 py-2 text-sm">
+                        <span className="font-black text-slate-900">Valor cuota:</span>{" "}
+                        {formatCurrency(receiptData.prestamo.valorCuota)}
+                      </div>
 
-              <div className="mt-4 flex items-center justify-between gap-3 rounded-[18px] bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
-                <span>Saldo restante</span>
-                <strong>
-                  {formatCurrency(Math.max(receiptData.prestamo.saldoRestante, 0))}
-                </strong>
-              </div>
+                      <div className="grid sm:grid-cols-2">
+                        <div className="border-b border-slate-300 sm:border-b-0 sm:border-r">
+                          <div className="border-b border-slate-300 bg-slate-50 px-3 py-2 text-center text-sm font-black uppercase tracking-[0.14em] text-slate-900">
+                            Datos cliente
+                          </div>
+                          <div className="grid gap-0 text-sm text-slate-700">
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Nombre:</span>{" "}
+                              {formatReceiptField(receiptData.cliente.nombre)}
+                            </div>
+                            <div className="px-3 py-2">
+                              <span className="font-black text-slate-900">Direccion:</span>{" "}
+                              {formatReceiptField(receiptData.cliente.direccion)}
+                            </div>
+                          </div>
+                        </div>
 
-              <p className="mt-4 border-t border-dashed border-slate-300 pt-4 text-center text-xs text-slate-500">
-                Gracias por su pago. Conserve este recibo como soporte.
-              </p>
+                        <div className="border-b border-slate-300 sm:border-b-0">
+                          <div className="border-b border-slate-300 bg-slate-50 px-3 py-2 text-center text-sm font-black uppercase tracking-[0.14em] text-slate-900">
+                            Extracto de manejo
+                          </div>
+                          <div className="grid gap-0 text-sm text-slate-700">
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">N de cuotas:</span>{" "}
+                              {receiptData.prestamo.numeroCuotas}
+                            </div>
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Saldo en cuotas:</span>{" "}
+                              {saldoEnCuotas}
+                            </div>
+                            <div className="px-3 py-2">
+                              <span className="font-black text-slate-900">Creditos en dias:</span>{" "}
+                              {creditosEnDia}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid sm:grid-cols-2">
+                        <div className="border-b border-slate-300 sm:border-b-0 sm:border-r">
+                          <div className="border-b border-slate-300 bg-slate-50 px-3 py-2 text-center text-sm font-black uppercase tracking-[0.14em] text-slate-900">
+                            Prestamo
+                          </div>
+                          <div className="grid gap-0 text-sm text-slate-700">
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Ultimo pago:</span>{" "}
+                              {formatCurrency(receiptData.pago.monto)}
+                            </div>
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Total pagado:</span>{" "}
+                              {formatCurrency(totalPagado)}
+                            </div>
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Fecha de pago:</span>{" "}
+                              {formatDate(receiptData.pago.createdAt)}
+                            </div>
+                            <div className="px-3 py-2">
+                              <span className="font-black text-slate-900">Saldo actual:</span>{" "}
+                              {formatCurrency(Math.max(receiptData.prestamo.saldoRestante, 0))}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="border-b border-slate-300 bg-slate-50 px-3 py-2 text-center text-sm font-black uppercase tracking-[0.14em] text-slate-900">
+                            Control
+                          </div>
+                          <div className="grid gap-0 text-sm text-slate-700">
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Atrasos:</span> {atrasos}
+                            </div>
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Dominical:</span> --
+                            </div>
+                            <div className="border-b border-slate-200 px-3 py-2">
+                              <span className="font-black text-slate-900">Telefono:</span>{" "}
+                              {formatReceiptField(receiptData.cliente.telefono)}
+                            </div>
+                            <div className="px-3 py-3 text-center text-lg font-black text-green-800">
+                              WhatsApp {BUSINESS_PHONE}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {receiptData.cliente.fotoUrl ? (
+                      <div className="mt-4 flex items-center justify-center gap-3 rounded-[20px] border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                        <Image
+                          src={receiptData.cliente.fotoUrl}
+                          alt={receiptData.cliente.nombre}
+                          width={60}
+                          height={60}
+                          unoptimized
+                          className="h-[60px] w-[60px] rounded-full border-4 border-green-100 object-cover"
+                        />
+                        <p>Foto del cliente incluida como soporte de este recibo.</p>
+                      </div>
+                    ) : null}
+
+                    <p className="mt-4 border-t border-dashed border-slate-300 pt-4 text-center text-xs text-slate-500">
+                      Gracias por su pago. Conserve este recibo como soporte.
+                    </p>
+                  </>
+                );
+              })()}
             </div>
           </section>
         ) : null}
@@ -1695,12 +2212,157 @@ export default function Home() {
                           {formatCurrency(pago.monto)}
                         </p>
                       </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenReceiptFromPayment(pago)}
+                          className="rounded-2xl border border-green-200 bg-green-50 px-4 py-2 text-sm font-bold text-green-800 transition hover:bg-green-100"
+                        >
+                          Ver recibo
+                        </button>
+                      </div>
                     </article>
                   );
                 })}
               </div>
             </article>
           </div>
+        </section>
+        ) : null}
+
+        {activeTab === "ganancias" ? (
+        <section className="grid gap-4">
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                Ganancias
+              </p>
+              <h2 className="section-title text-2xl font-black text-slate-900">
+                Control por periodo y reparto
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                Aqui puedes ver la ganancia cobrada por dia, semana, quincena o mes, repartirla
+                entre empresa y personal con los porcentajes que definas, y consultar lo ganado
+                desde que empezaste.
+              </p>
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-[0.92fr_1.08fr]">
+              <div className="grid gap-3">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Periodo a revisar</span>
+                  <select
+                    value={profitPeriod}
+                    onChange={(event) => setProfitPeriod(event.target.value as ProfitPeriod)}
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                  >
+                    <option value="diario">Diario</option>
+                    <option value="semanal">Semanal</option>
+                    <option value="quincenal">Quincenal</option>
+                    <option value="mensual">Mensual</option>
+                  </select>
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">% empresa</span>
+                    <select
+                      value={String(normalizeClosedPercentage(profitDistribution.empresaPorcentaje))}
+                      onChange={(event) => handleCompanyPercentageChange(event.target.value)}
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    >
+                      {CLOSED_PERCENTAGE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}%
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">% personal</span>
+                    <select
+                      value={String(normalizeClosedPercentage(profitDistribution.personalPorcentaje))}
+                      onChange={(event) => handlePersonalPercentageChange(event.target.value)}
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    >
+                      {CLOSED_PERCENTAGE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}%
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveProfitDistribution}
+                  className="brand-button h-13 rounded-2xl px-5 text-sm font-bold transition"
+                >
+                  Guardar reparto
+                </button>
+
+                <div className="rounded-[24px] bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                  La ganancia del periodo se calcula con base en los pagos registrados en ese rango.
+                  El reparto se guarda en este navegador para no modificar tu base actual.
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-[24px] bg-[linear-gradient(135deg,rgba(14,116,144,0.12),rgba(59,130,246,0.12))] p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    Ganancia cobrada del {getPeriodLabel(profitPeriod)}
+                  </p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">
+                    {formatCurrency(gananciaPeriodo)}
+                  </p>
+                </div>
+                <div className="rounded-[24px] bg-[linear-gradient(135deg,rgba(16,185,129,0.14),rgba(132,204,22,0.12))] p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    Ganancia cobrada desde el inicio
+                  </p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">
+                    {formatCurrency(gananciaCobradaTotal)}
+                  </p>
+                </div>
+                <div className="rounded-[24px] border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-700">
+                    Empresa en el periodo
+                  </p>
+                  <p className="mt-2 text-2xl font-black text-emerald-900">
+                    {formatCurrency(gananciaPeriodoEmpresa)}
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-700">{empresaPorcentaje}% del periodo</p>
+                </div>
+                <div className="rounded-[24px] border border-sky-200 bg-sky-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-sky-700">
+                    Personal en el periodo
+                  </p>
+                  <p className="mt-2 text-2xl font-black text-sky-900">
+                    {formatCurrency(gananciaPeriodoPersonal)}
+                  </p>
+                  <p className="mt-1 text-xs text-sky-700">{personalPorcentaje}% del periodo</p>
+                </div>
+                <div className="rounded-[24px] border border-slate-200 bg-white/80 p-4 text-sm text-slate-600">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                    Empresa desde el inicio
+                  </p>
+                  <p className="mt-2 text-2xl font-black text-slate-900">
+                    {formatCurrency(gananciaTotalEmpresa)}
+                  </p>
+                </div>
+                <div className="rounded-[24px] border border-slate-200 bg-white/80 p-4 text-sm text-slate-600">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                    Personal desde el inicio
+                  </p>
+                  <p className="mt-2 text-2xl font-black text-slate-900">
+                    {formatCurrency(gananciaTotalPersonal)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </article>
         </section>
         ) : null}
 
@@ -2181,14 +2843,31 @@ export default function Home() {
                 </div>
 
                 <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Frecuencia de pago</span>
+                  <select
+                    value={loanForm.frecuenciaPago}
+                    onChange={(event) =>
+                      setLoanForm((current) => ({
+                        ...current,
+                        frecuenciaPago: normalizePaymentFrequency(event.target.value),
+                      }))
+                    }
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                  >
+                    {PAYMENT_FREQUENCIES.map((frecuencia) => (
+                      <option key={frecuencia} value={frecuencia}>
+                        {getPaymentFrequencyLabel(frecuencia)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="flex flex-col gap-2">
                   <span className="text-sm font-semibold text-slate-700">
                     Porcentaje de interes
                   </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={loanForm.porcentajeInteres}
+                  <select
+                    value={String(normalizeClosedPercentage(loanForm.porcentajeInteres))}
                     onChange={(event) =>
                       setLoanForm((current) => ({
                         ...current,
@@ -2197,8 +2876,13 @@ export default function Home() {
                     }
                     required
                     className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
-                    placeholder="20"
-                  />
+                  >
+                    {CLOSED_PERCENTAGE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}%
+                      </option>
+                    ))}
+                  </select>
                 </label>
 
                 {Number(loanForm.montoCapital) > 0 &&
@@ -2213,7 +2897,7 @@ export default function Home() {
                       );
 
                       return (
-                        <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                           <div>
                             <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
                               Interes
@@ -2236,6 +2920,14 @@ export default function Home() {
                             </p>
                             <p className="mt-2 text-2xl font-black">
                               {formatCurrency(preview.installmentValue)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                              Frecuencia
+                            </p>
+                            <p className="mt-2 text-2xl font-black">
+                              {getPaymentFrequencyLabel(loanForm.frecuenciaPago)}
                             </p>
                           </div>
                         </div>
@@ -2311,6 +3003,10 @@ export default function Home() {
                           <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Total</p>
                           <p className="mt-2 font-bold">{formatCurrency(prestamo.totalCobrar)}</p>
                         </div>
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Frecuencia</p>
+                          <p className="mt-2 font-bold">{getPaymentFrequencyLabel(prestamo.frecuenciaPago)}</p>
+                        </div>
                         <div className="rounded-2xl bg-yellow-50 p-3">
                           <p className="text-xs uppercase tracking-[0.2em] text-yellow-700">Saldo</p>
                           <p className="mt-2 font-bold text-yellow-900">
@@ -2348,6 +3044,7 @@ export default function Home() {
                       <th className="px-4 py-3">Interes</th>
                       <th className="px-4 py-3">Total</th>
                       <th className="px-4 py-3">Cuota</th>
+                      <th className="px-4 py-3">Frecuencia</th>
                       <th className="px-4 py-3">Cuotas</th>
                       <th className="px-4 py-3">Saldo</th>
                       <th className="px-4 py-3">Estado</th>
@@ -2367,6 +3064,7 @@ export default function Home() {
                           <td className="px-4 py-3">{prestamo.porcentajeInteres}%</td>
                           <td className="px-4 py-3">{formatCurrency(prestamo.totalCobrar)}</td>
                           <td className="px-4 py-3">{formatCurrency(prestamo.valorCuota)}</td>
+                          <td className="px-4 py-3">{getPaymentFrequencyLabel(prestamo.frecuenciaPago)}</td>
                           <td className="px-4 py-3">
                             {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
                           </td>
@@ -2441,7 +3139,7 @@ export default function Home() {
 
                         return (
                           <option key={prestamo.id} value={prestamo.id}>
-                            {cliente} - {formatCurrency(prestamo.valorCuota)} - saldo{" "}
+                            {cliente} - {getPaymentFrequencyLabel(prestamo.frecuenciaPago)} - {formatCurrency(prestamo.valorCuota)} - saldo{" "}
                             {formatCurrency(prestamo.saldoRestante)}
                           </option>
                         );
@@ -2513,6 +3211,15 @@ export default function Home() {
                         <strong className="text-slate-900">
                           {formatCurrency(prestamo?.saldoRestante ?? 0)}
                         </strong>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenReceiptFromPayment(pago)}
+                          className="rounded-2xl border border-green-200 bg-green-50 px-4 py-2 text-sm font-bold text-green-800 transition hover:bg-green-100"
+                        >
+                          Volver a generar recibo
+                        </button>
                       </div>
                     </article>
                   );
