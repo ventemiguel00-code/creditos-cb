@@ -161,6 +161,16 @@ function normalizeClosedPercentage(value: unknown) {
   return nearest;
 }
 
+function normalizeIntegerPercentage(value: unknown) {
+  const parsed = Math.round(Number(value ?? 0));
+
+  if (Number.isNaN(parsed)) {
+    return 0;
+  }
+
+  return Math.min(Math.max(parsed, 0), 100);
+}
+
 function readLoanMetadata(): LoanMetadata {
   if (typeof window === "undefined") {
     return {};
@@ -1253,7 +1263,7 @@ export default function Home() {
     try {
       const capital = Number(loanForm.montoCapital);
       const numeroCuotas = Number(loanForm.numeroCuotas);
-      const porcentajeInteres = Number(loanForm.porcentajeInteres);
+      const porcentajeInteres = normalizeIntegerPercentage(loanForm.porcentajeInteres);
       const frecuenciaPago = normalizePaymentFrequency(loanForm.frecuenciaPago);
 
       if (!loanForm.clienteId || capital <= 0 || numeroCuotas <= 0 || porcentajeInteres < 0) {
@@ -3189,23 +3199,24 @@ export default function Home() {
                   <span className="text-sm font-semibold text-slate-700">
                     Porcentaje de interes
                   </span>
-                  <select
-                    value={String(normalizeClosedPercentage(loanForm.porcentajeInteres))}
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={loanForm.porcentajeInteres}
                     onChange={(event) =>
                       setLoanForm((current) => ({
                         ...current,
-                        porcentajeInteres: event.target.value,
+                        porcentajeInteres: String(
+                          normalizeIntegerPercentage(event.target.value),
+                        ),
                       }))
                     }
                     required
                     className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
-                  >
-                    {CLOSED_PERCENTAGE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}%
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="20"
+                  />
                 </label>
 
                 {Number(loanForm.montoCapital) > 0 &&
@@ -3216,40 +3227,40 @@ export default function Home() {
                       const preview = calculateLoanValues(
                         Number(loanForm.montoCapital),
                         Number(loanForm.numeroCuotas),
-                        Number(loanForm.porcentajeInteres),
+                        normalizeIntegerPercentage(loanForm.porcentajeInteres),
                       );
 
                       return (
-                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
                               Interes
                             </p>
-                            <p className="mt-2 text-2xl font-black">
+                            <p className="mt-2 break-words text-3xl font-black leading-none">
                               {preview.interestRatePercent}%
                             </p>
                           </div>
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
                               Total a cobrar
                             </p>
-                            <p className="mt-2 text-2xl font-black">
+                            <p className="mt-2 break-words text-3xl font-black leading-tight">
                               {formatCurrency(preview.totalToCollect)}
                             </p>
                           </div>
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
                               Valor cuota
                             </p>
-                            <p className="mt-2 text-2xl font-black">
+                            <p className="mt-2 break-words text-3xl font-black leading-tight">
                               {formatCurrency(preview.installmentValue)}
                             </p>
                           </div>
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.22em] text-slate-300">
+                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
                               Frecuencia
                             </p>
-                            <p className="mt-2 text-2xl font-black">
+                            <p className="mt-2 break-words text-3xl font-black leading-none">
                               {getPaymentFrequencyLabel(loanForm.frecuenciaPago)}
                             </p>
                           </div>
