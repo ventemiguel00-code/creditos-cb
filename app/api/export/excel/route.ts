@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { AUTH_COOKIE_NAME, isValidSessionToken } from "@/lib/auth";
+import { formatShortDate } from "@/lib/loan-utils";
 import { fetchDashboardData } from "@/lib/server-data";
 
 export async function GET() {
@@ -24,23 +25,20 @@ export async function GET() {
 
   const resumen = [
     ["Reporte", "Creditos CB"],
-    ["Fecha de exportacion", new Date().toISOString()],
+    ["Fecha de exportacion", formatShortDate(new Date().toISOString())],
     ["Monto inicial", montoInicial],
     ["Clientes", clientes.length],
     ["Prestamos", prestamos.length],
     ["Pagos", pagos.length],
   ];
   const clientesSheet = clientes.map((cliente) => ({
-    ID: cliente.id,
     Nombre: cliente.nombre,
     Direccion: cliente.direccion,
     Telefono: cliente.telefono,
     Correo: cliente.correo ?? "",
-    FechaRegistro: cliente.fecha_registro ?? "",
+    FechaRegistro: formatShortDate(cliente.fecha_registro),
   }));
   const prestamosSheet = prestamos.map((prestamo) => ({
-    ID: prestamo.id,
-    ClienteID: prestamo.cliente_id,
     MontoPrestado: prestamo.monto_prestado,
     TotalAPagar: prestamo.total_a_pagar,
     NumeroCuotas: prestamo.numero_cuotas,
@@ -50,14 +48,12 @@ export async function GET() {
     PagosRealizados: prestamo.pagos_realizados,
     SaldoRestante: prestamo.saldo_restante,
     PorcentajeInteres: prestamo.porcentaje_interes,
-    FechaInicio: prestamo.fecha_inicio ?? "",
+    FechaInicio: formatShortDate(prestamo.fecha_inicio),
   }));
   const pagosSheet = pagos.map((pago) => ({
-    ID: pago.id,
-    PrestamoID: pago.prestamo_id,
     MontoPagado: pago.monto_pagado,
     CuotaNumero: pago.cuota_numero,
-    FechaPago: pago.fecha_pago ?? "",
+    FechaPago: formatShortDate(pago.fecha_pago),
   }));
 
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(resumen), "Resumen");

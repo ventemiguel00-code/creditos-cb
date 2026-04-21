@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { getLoanOverdueInfo, type LoanFrequency } from "@/lib/loan-utils";
 
 type ClienteRow = {
   id: string;
@@ -17,6 +18,9 @@ type PrestamoRow = {
   total_a_pagar: number;
   numero_cuotas: number;
   valor_cuota: number;
+  frecuencia_pago?: string | null;
+  frecuencia?: string | null;
+  modalidad_pago?: string | null;
   estado: string | null;
   fecha_inicio: string | null;
 };
@@ -28,6 +32,26 @@ type PagoRow = {
   cuota_numero: number;
   fecha_pago: string | null;
 };
+
+function normalizeServerPaymentFrequency(value: string | null | undefined): LoanFrequency {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (normalized === "semanal" || normalized === "semana") {
+    return "semanal";
+  }
+
+  if (normalized === "quincenal" || normalized === "15nal" || normalized === "quince") {
+    return "quincenal";
+  }
+
+  if (normalized === "mensual" || normalized === "mes") {
+    return "mensual";
+  }
+
+  return "diaria";
+}
 
 function createServerSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -75,19 +99,33 @@ export async function fetchDashboardData() {
     const pagosPrestamo = pagos.filter((pago) => pago.prestamo_id === prestamo.id);
     const totalPagado = pagosPrestamo.reduce((sum, pago) => sum + Number(pago.monto_pagado ?? 0), 0);
     const saldoRestante = Math.max(Number(prestamo.total_a_pagar ?? 0) - totalPagado, 0);
+    const frecuenciaPago = normalizeServerPaymentFrequency(
+      prestamo.frecuencia_pago ?? prestamo.frecuencia ?? prestamo.modalidad_pago,
+    );
     const porcentajeInteres =
       Number(prestamo.monto_prestado) > 0
         ? ((Number(prestamo.total_a_pagar) - Number(prestamo.monto_prestado)) /
             Number(prestamo.monto_prestado)) *
           100
         : 0;
+    const overdueInfo = getLoanOverdueInfo({
+      createdAt: prestamo.fecha_inicio,
+      frecuenciaPago,
+      cuotasPagadas: pagosPrestamo.length,
+      saldoRestante,
+    });
 
     return {
       ...prestamo,
       pagos_realizados: pagosPrestamo.length,
       saldo_restante: saldoRestante,
       porcentaje_interes: Math.round((porcentajeInteres + Number.EPSILON) * 100) / 100,
-      estado_visible: saldoRestante <= 0 ? "Pago de prestamo completado" : "Al dia",
+      estado_visible:
+        saldoRestante <= 0
+          ? "Pago de prestamo completado"
+          : overdueInfo.isOverdue
+            ? `Moroso - ${overdueInfo.overdueDays} dia${overdueInfo.overdueDays === 1 ? "" : "s"} de mora`
+            : "Al dia",
     };
   });
 

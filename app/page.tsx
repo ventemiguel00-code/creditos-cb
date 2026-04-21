@@ -14,6 +14,8 @@ import {
   calculateLoanValues,
   formatCurrency,
   formatDate,
+  formatShortDate,
+  getLoanOverdueInfo,
   roundCurrency,
 } from "@/lib/loan-utils";
 
@@ -329,7 +331,49 @@ function isSchemaColumnError(message: string) {
 }
 
 function getLoanStatusLabel(prestamo: Prestamo) {
-  return prestamo.saldoRestante <= 0 ? "Pago de prestamo completado" : "Al dia";
+  const overdueInfo = getLoanOverdueInfo({
+    createdAt: prestamo.createdAt,
+    frecuenciaPago: prestamo.frecuenciaPago,
+    cuotasPagadas: prestamo.cuotasPagadas,
+    saldoRestante: prestamo.saldoRestante,
+  });
+
+  if (prestamo.saldoRestante <= 0) {
+    return "Pago de prestamo completado";
+  }
+
+  if (overdueInfo.isOverdue) {
+    return `Moroso - ${overdueInfo.overdueDays} dia${overdueInfo.overdueDays === 1 ? "" : "s"} de mora`;
+  }
+
+  return "Al dia";
+}
+
+function getClientStatusLabel(clienteId: string, prestamos: Prestamo[]) {
+  const prestamosCliente = prestamos.filter((prestamo) => prestamo.clienteId === clienteId);
+
+  if (prestamosCliente.length === 0) {
+    return "Sin prestamos";
+  }
+
+  const overdueDays = prestamosCliente.reduce((maxDays, prestamo) => {
+    const overdueInfo = getLoanOverdueInfo({
+      createdAt: prestamo.createdAt,
+      frecuenciaPago: prestamo.frecuenciaPago,
+      cuotasPagadas: prestamo.cuotasPagadas,
+      saldoRestante: prestamo.saldoRestante,
+    });
+
+    return overdueInfo.isOverdue ? Math.max(maxDays, overdueInfo.overdueDays) : maxDays;
+  }, 0);
+
+  if (overdueDays > 0) {
+    return `Moroso - ${overdueDays} dia${overdueDays === 1 ? "" : "s"} de mora`;
+  }
+
+  const hasActiveLoan = prestamosCliente.some((prestamo) => prestamo.saldoRestante > 0);
+
+  return hasActiveLoan ? "Al dia" : "Pago de prestamo completado";
 }
 
 function getPaymentFrequencyLabel(frecuenciaPago: PaymentFrequency) {
@@ -3095,6 +3139,11 @@ export default function Home() {
                     key={cliente.id}
                     className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
                   >
+                    {(() => {
+                      const clientStatus = getClientStatusLabel(cliente.id, prestamos);
+
+                      return (
+                        <>
                     <div className="flex items-center gap-3">
                       <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100">
                         {cliente.fotoUrl ? (
@@ -3118,6 +3167,9 @@ export default function Home() {
                         </h3>
                         <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
                         <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
+                        <p className="mt-1 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                          {clientStatus}
+                        </p>
                       </div>
                     </div>
                     <div className="mt-4 grid gap-2 rounded-[22px] bg-slate-50 p-3 text-sm text-slate-600">
@@ -3135,6 +3187,9 @@ export default function Home() {
                     >
                       Borrar cliente
                     </button>
+                        </>
+                      );
+                    })()}
                   </article>
                 ))}
               </div>
@@ -3147,29 +3202,39 @@ export default function Home() {
                       <th className="px-4 py-3">Telefono</th>
                       <th className="px-4 py-3">Correo</th>
                       <th className="px-4 py-3">Direccion</th>
+                      <th className="px-4 py-3">Estado</th>
                       <th className="px-4 py-3">Fecha de creacion</th>
                       <th className="px-4 py-3">Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleClientes.map((cliente) => (
-                      <tr key={cliente.id} className="border-t border-slate-100 text-sm">
-                        <td className="px-4 py-3 font-semibold text-slate-800">{cliente.nombre}</td>
-                        <td className="px-4 py-3">{cliente.telefono}</td>
-                        <td className="px-4 py-3">{cliente.correo || "--"}</td>
-                        <td className="px-4 py-3">{cliente.direccion}</td>
-                        <td className="px-4 py-3">{formatDate(cliente.createdAt)}</td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteClient(cliente)}
-                            className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
-                          >
-                            Borrar
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {visibleClientes.map((cliente) => {
+                      const clientStatus = getClientStatusLabel(cliente.id, prestamos);
+
+                      return (
+                        <tr key={cliente.id} className="border-t border-slate-100 text-sm">
+                          <td className="px-4 py-3 font-semibold text-slate-800">{cliente.nombre}</td>
+                          <td className="px-4 py-3">{cliente.telefono}</td>
+                          <td className="px-4 py-3">{cliente.correo || "--"}</td>
+                          <td className="px-4 py-3">{cliente.direccion}</td>
+                          <td className="px-4 py-3">
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                              {clientStatus}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">{formatDate(cliente.createdAt)}</td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteClient(cliente)}
+                              className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
+                            >
+                              Borrar
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
