@@ -705,7 +705,13 @@ export default function Home() {
   const [pagos, setPagos] = useState<Pago[]>([]);
   const [photoPreview, setPhotoPreview] = useState("");
   const [activeTab, setActiveTab] = useState<
-    "resumen" | "ganancias" | "clientes" | "prestamos" | "pagos" | "configuracion"
+    | "resumen"
+    | "ganancias"
+    | "clientes"
+    | "prestamos"
+    | "pagos"
+    | "historial"
+    | "configuracion"
   >("resumen");
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
   const [initialCapitalInput, setInitialCapitalInput] = useState(() => {
@@ -746,6 +752,7 @@ export default function Home() {
   const [paymentForm, setPaymentForm] = useState({
     prestamoId: "",
   });
+  const [selectedHistoryClientId, setSelectedHistoryClientId] = useState("");
   const [isPending, startTransition] = useTransition();
   const [isDownloadingExcel, setIsDownloadingExcel] = useState(false);
   const [isCleaningHistory, setIsCleaningHistory] = useState(false);
@@ -983,9 +990,20 @@ export default function Home() {
       };
     });
 
+    const pagosEnriched = pagosMapped
+      .map((pago) => {
+        const prestamoRelacionado = prestamosMapped.find((item) => item.id === pago.prestamoId);
+
+        return {
+          ...pago,
+          clienteId: pago.clienteId || prestamoRelacionado?.clienteId || "",
+        };
+      })
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+
     setClientes((clientesResponse.data ?? []).map((row) => mapCliente(row)));
     setPrestamos(prestamosMapped);
-    setPagos(pagosMapped);
+    setPagos(pagosEnriched);
     setLoanMetadata(storedLoanMetadata);
     setInitialCapitalInput(String(initialCapitalResponse.value));
     setCapitalStorageMode(initialCapitalResponse.source);
@@ -1505,7 +1523,10 @@ export default function Home() {
         throw updateError;
       }
 
-      const pago = mapPago(pagoData);
+      const pago = {
+        ...mapPago(pagoData),
+        clienteId: prestamo.clienteId,
+      };
       const prestamoActualizado: Prestamo = {
         ...prestamo,
         saldoRestante: nuevoSaldo,
@@ -1808,14 +1829,66 @@ export default function Home() {
       .toLowerCase()
       .includes(normalizedClientSearch);
   });
+  const paymentHistoryByClient = clientes
+    .map((cliente) => {
+      const pagosCliente = pagos
+        .filter((pago) => pago.clienteId === cliente.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const prestamosCliente = prestamos.filter((prestamo) => prestamo.clienteId === cliente.id);
+
+      if (pagosCliente.length === 0) {
+        return null;
+      }
+
+      const totalPagadoCliente = pagosCliente.reduce((sum, pago) => sum + pago.monto, 0);
+      const saldoPendienteCliente = prestamosCliente.reduce(
+        (sum, prestamo) => sum + prestamo.saldoRestante,
+        0,
+      );
+      const ultimoPago = pagosCliente[0]?.createdAt ?? "";
+
+      return {
+        cliente,
+        pagos: pagosCliente,
+        prestamos: prestamosCliente,
+        totalPagadoCliente,
+        saldoPendienteCliente,
+        ultimoPago,
+      };
+    })
+    .filter((group): group is NonNullable<typeof group> => Boolean(group))
+    .sort((a, b) => new Date(b.ultimoPago).getTime() - new Date(a.ultimoPago).getTime());
+  const selectedPaymentHistory =
+    paymentHistoryByClient.find((group) => group.cliente.id === selectedHistoryClientId) ??
+    paymentHistoryByClient[0] ??
+    null;
   const tabItems = [
     { id: "resumen", label: "Resumen" },
     { id: "clientes", label: "Clientes" },
     { id: "prestamos", label: "Prestamos" },
     { id: "pagos", label: "Pagos" },
+    { id: "historial", label: "Historial de pago" },
     { id: "ganancias", label: "Ganancias" },
     { id: "configuracion", label: "Configuracion" },
   ] as const;
+
+  useEffect(() => {
+    if (paymentHistoryByClient.length === 0) {
+      if (selectedHistoryClientId) {
+        setSelectedHistoryClientId("");
+      }
+
+      return;
+    }
+
+    const hasSelectedClient = paymentHistoryByClient.some(
+      (group) => group.cliente.id === selectedHistoryClientId,
+    );
+
+    if (!selectedHistoryClientId || !hasSelectedClient) {
+      setSelectedHistoryClientId(paymentHistoryByClient[0]?.cliente.id ?? "");
+    }
+  }, [paymentHistoryByClient, selectedHistoryClientId]);
 
   if (authStatus === "loading") {
     return (
@@ -3443,7 +3516,7 @@ export default function Home() {
         ) : null}
 
         {activeTab === "pagos" ? (
-        <section className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
+        <section className="grid gap-4">
           <div className="flex flex-col gap-4">
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
               <div className="mb-5">
@@ -3486,7 +3559,8 @@ export default function Home() {
 
                 <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/70 p-4 text-sm leading-6 text-slate-600">
                   El sistema registra una cuota completa por clic y genera el ticket imprimible
-                  con fecha, foto, valor del pago, cuota y saldo restante.
+                  con fecha, foto, valor del pago, cuota y saldo restante. El historial detallado
+                  de cada cliente lo puedes consultar en la pestaña <strong>Historial de pago</strong>.
                 </div>
 
                 <button
@@ -3498,57 +3572,147 @@ export default function Home() {
               </form>
             </article>
           </div>
+        </section>
+        ) : null}
 
-          <div className="flex flex-col gap-4">
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
-              <div className="mb-5 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
-                    Historial
+        {activeTab === "historial" ? (
+        <section className="grid gap-4 xl:grid-cols-[0.4fr_1fr]">
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                Historial
+              </p>
+              <h2 className="section-title text-2xl font-black text-slate-900">
+                Historial de pago
+              </h2>
+            </div>
+
+            {paymentHistoryByClient.length === 0 ? (
+              <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                Todavia no se han registrado pagos para consultar.
+              </div>
+            ) : (
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Selecciona el usuario</span>
+                <select
+                  value={selectedPaymentHistory?.cliente.id ?? ""}
+                  onChange={(event) => setSelectedHistoryClientId(event.target.value)}
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                >
+                  {paymentHistoryByClient.map((group) => (
+                    <option key={group.cliente.id} value={group.cliente.id}>
+                      {group.cliente.nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {selectedPaymentHistory ? (
+              <div className="mt-4 grid gap-3">
+                <div className="rounded-[24px] bg-emerald-50 px-4 py-3">
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-emerald-700">
+                    Total pagado
                   </p>
-                  <h2 className="section-title text-2xl font-black text-slate-900">
-                    Ultimos pagos
-                  </h2>
+                  <p className="mt-1 text-2xl font-black text-emerald-900">
+                    {formatCurrency(selectedPaymentHistory.totalPagadoCliente)}
+                  </p>
+                </div>
+                <div className="rounded-[24px] bg-amber-50 px-4 py-3">
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-amber-700">
+                    Saldo pendiente
+                  </p>
+                  <p className="mt-1 text-2xl font-black text-amber-900">
+                    {formatCurrency(selectedPaymentHistory.saldoPendienteCliente)}
+                  </p>
+                </div>
+                <div className="rounded-[24px] bg-sky-50 px-4 py-3">
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-sky-700">
+                    Ultimo pago
+                  </p>
+                  <p className="mt-1 text-base font-black text-sky-900">
+                    {formatDate(selectedPaymentHistory.ultimoPago)}
+                  </p>
                 </div>
               </div>
+            ) : null}
+          </article>
 
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Movimientos
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  {selectedPaymentHistory?.cliente.nombre ?? "Sin cliente seleccionado"}
+                </h2>
+              </div>
+              {selectedPaymentHistory ? (
+                <span className="rounded-full bg-slate-100 px-4 py-2 text-xs font-black uppercase tracking-[0.16em] text-slate-600">
+                  {selectedPaymentHistory.pagos.length} pagos
+                </span>
+              ) : null}
+            </div>
+
+            {!selectedPaymentHistory ? (
+              <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                Selecciona un usuario para consultar su historial independiente.
+              </div>
+            ) : (
               <div className="grid gap-3">
-                {pagos.length === 0 ? (
-                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
-                    Todavia no se han registrado pagos.
-                  </div>
-                ) : null}
-
-                {pagos.slice(0, 8).map((pago) => {
-                  const prestamo = prestamos.find((item) => item.id === pago.prestamoId);
-                  const cliente =
-                    clientes.find((item) => item.id === pago.clienteId)?.nombre ?? "Cliente";
+                {selectedPaymentHistory.pagos.map((pago) => {
+                  const prestamo = selectedPaymentHistory.prestamos.find(
+                    (item) => item.id === pago.prestamoId,
+                  );
 
                   return (
-                    <article
+                    <div
                       key={pago.id}
-                      className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                      className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4"
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <h3 className="text-base font-black text-slate-900">{cliente}</h3>
-                          <p className="mt-1 text-sm text-slate-500">{formatDate(pago.createdAt)}</p>
+                          <p className="text-sm font-black text-slate-900">
+                            Cuota {pago.cuotaNumero}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {formatDate(pago.createdAt)}
+                          </p>
                         </div>
-                        <div className="text-right">
+                        <div className="text-left sm:text-right">
                           <p className="text-lg font-black text-green-700">
                             {formatCurrency(pago.monto)}
                           </p>
                           <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
-                            Cuota {pago.cuotaNumero}
+                            Pago registrado
                           </p>
                         </div>
                       </div>
-                      <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                        Saldo restante:{" "}
-                        <strong className="text-slate-900">
-                          {formatCurrency(prestamo?.saldoRestante ?? 0)}
-                        </strong>
+
+                      <div className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-3">
+                        <div className="rounded-2xl bg-white px-3 py-2">
+                          Frecuencia:{" "}
+                          <strong className="text-slate-900">
+                            {prestamo
+                              ? getPaymentFrequencyLabel(prestamo.frecuenciaPago)
+                              : "Sin prestamo"}
+                          </strong>
+                        </div>
+                        <div className="rounded-2xl bg-white px-3 py-2">
+                          Saldo restante:{" "}
+                          <strong className="text-slate-900">
+                            {formatCurrency(prestamo?.saldoRestante ?? 0)}
+                          </strong>
+                        </div>
+                        <div className="rounded-2xl bg-white px-3 py-2">
+                          Estado:{" "}
+                          <strong className="text-slate-900">
+                            {prestamo ? getLoanStatusLabel(prestamo) : "Sin prestamo"}
+                          </strong>
+                        </div>
                       </div>
+
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button
                           type="button"
@@ -3558,12 +3722,12 @@ export default function Home() {
                           Volver a generar recibo
                         </button>
                       </div>
-                    </article>
+                    </div>
                   );
                 })}
               </div>
-            </article>
-          </div>
+            )}
+          </article>
         </section>
         ) : null}
         </div>
