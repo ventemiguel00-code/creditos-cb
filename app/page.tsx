@@ -2769,8 +2769,8 @@ export default function Home() {
         ) : null}
 
         {activeTab === "resumen" ? (
-        <section className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-          <div className="flex flex-col gap-4">
+        <section className="grid gap-4">
+          <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr] xl:items-start">
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
               <div className="mb-5">
                 <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
@@ -2796,7 +2796,7 @@ export default function Home() {
               </div>
             </article>
 
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5 xl:row-span-2 xl:col-start-2">
               <div className="mb-5 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
@@ -3215,9 +3215,9 @@ export default function Home() {
         ) : null}
 
         {activeTab === "configuracion" ? (
-        <section className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-          <div className="flex flex-col gap-4">
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+        <section className="grid gap-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-rows-[auto_auto] xl:items-start">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5 xl:col-start-2 xl:row-start-1 xl:row-span-2 self-start">
               <div className="mb-5 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
@@ -3262,7 +3262,7 @@ export default function Home() {
               </p>
             </article>
 
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5 xl:col-start-1 xl:row-start-1 self-start">
               <div className="mb-5 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
@@ -3342,7 +3342,7 @@ export default function Home() {
               </form>
             </article>
 
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <article className="glass-panel rounded-[30px] p-4 sm:p-5 xl:col-start-1 xl:row-start-2 self-start">
               <div className="mb-5 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
