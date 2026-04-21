@@ -77,11 +77,17 @@ type LoanMetadata = Record<
   }
 >;
 
+type ObservationMetadata = {
+  clientes: Record<string, string>;
+  prestamos: Record<string, string>;
+};
+
 type ProfitPeriod = "diario" | "semanal" | "quincenal" | "mensual";
 
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
 const LAST_CLEANUP_RUN_KEY = "creditos-cb-last-cleanup-run";
 const LOAN_METADATA_KEY = "creditos-cb-loan-metadata";
+const OBSERVATION_METADATA_KEY = "creditos-cb-observations";
 const PROFIT_DISTRIBUTION_KEY = "creditos-cb-profit-distribution";
 const APP_CONFIG_TABLE = "configuracion_app";
 const APP_CONFIG_ROW_ID = "principal";
@@ -197,6 +203,46 @@ function saveLoanMetadata(metadata: LoanMetadata) {
   }
 
   window.localStorage.setItem(LOAN_METADATA_KEY, JSON.stringify(metadata));
+}
+
+function readObservationMetadata(): ObservationMetadata {
+  if (typeof window === "undefined") {
+    return {
+      clientes: {},
+      prestamos: {},
+    };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(OBSERVATION_METADATA_KEY);
+
+    if (!raw) {
+      return {
+        clientes: {},
+        prestamos: {},
+      };
+    }
+
+    const parsed = JSON.parse(raw) as ObservationMetadata;
+
+    return {
+      clientes: parsed.clientes ?? {},
+      prestamos: parsed.prestamos ?? {},
+    };
+  } catch {
+    return {
+      clientes: {},
+      prestamos: {},
+    };
+  }
+}
+
+function saveObservationMetadata(metadata: ObservationMetadata) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(OBSERVATION_METADATA_KEY, JSON.stringify(metadata));
 }
 
 function readProfitDistribution() {
@@ -750,11 +796,14 @@ export default function Home() {
   const [photoPreview, setPhotoPreview] = useState("");
   const [activeTab, setActiveTab] = useState<
     | "resumen"
+    | "morosos"
+    | "vencimientos"
     | "ganancias"
     | "clientes"
     | "prestamos"
     | "pagos"
     | "historial"
+    | "observaciones"
     | "configuracion"
   >("resumen");
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
@@ -791,12 +840,24 @@ export default function Home() {
     porcentajeInteres: "20",
   });
   const [loanMetadata, setLoanMetadata] = useState<LoanMetadata>({});
+  const [observationMetadata, setObservationMetadata] = useState<ObservationMetadata>({
+    clientes: {},
+    prestamos: {},
+  });
   const [profitPeriod, setProfitPeriod] = useState<ProfitPeriod>("semanal");
   const [profitDistribution, setProfitDistribution] = useState(() => readProfitDistribution());
   const [paymentForm, setPaymentForm] = useState({
     prestamoId: "",
   });
   const [selectedHistoryClientId, setSelectedHistoryClientId] = useState("");
+  const [openTabGroup, setOpenTabGroup] = useState<"Operacion" | "Cobranza" | "Control" | "Ajustes">("Operacion");
+  const [observationForm, setObservationForm] = useState({
+    clienteId: "",
+    prestamoId: "",
+    clienteObservacion: "",
+    prestamoObservacion: "",
+  });
+  const [partialPaymentInput, setPartialPaymentInput] = useState("");
   const [isPending, startTransition] = useTransition();
   const [isDownloadingExcel, setIsDownloadingExcel] = useState(false);
   const [isCleaningHistory, setIsCleaningHistory] = useState(false);
@@ -804,6 +865,7 @@ export default function Home() {
 
   useEffect(() => {
     setLoanMetadata(readLoanMetadata());
+    setObservationMetadata(readObservationMetadata());
     setProfitDistribution(readProfitDistribution());
   }, []);
 
@@ -1516,6 +1578,38 @@ export default function Home() {
     });
   }
 
+  function handleSaveObservations() {
+    const nextMetadata: ObservationMetadata = {
+      clientes: { ...observationMetadata.clientes },
+      prestamos: { ...observationMetadata.prestamos },
+    };
+
+    const clienteId = observationForm.clienteId;
+    const prestamoId = observationForm.prestamoId;
+    const clienteObservacion = observationForm.clienteObservacion.trim();
+    const prestamoObservacion = observationForm.prestamoObservacion.trim();
+
+    if (clienteId) {
+      if (clienteObservacion) {
+        nextMetadata.clientes[clienteId] = clienteObservacion;
+      } else {
+        delete nextMetadata.clientes[clienteId];
+      }
+    }
+
+    if (prestamoId) {
+      if (prestamoObservacion) {
+        nextMetadata.prestamos[prestamoId] = prestamoObservacion;
+      } else {
+        delete nextMetadata.prestamos[prestamoId];
+      }
+    }
+
+    saveObservationMetadata(nextMetadata);
+    setObservationMetadata(nextMetadata);
+    setScreenMessage("Observaciones guardadas correctamente.");
+  }
+
   async function handleRegisterPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setScreenMessage("");
@@ -1863,6 +1957,54 @@ export default function Home() {
   const initialCapital = Math.max(Number(initialCapitalInput || 0), 0);
   const capitalDisponible = Math.max(initialCapital - capitalPrestado + totalRecaudado, 0);
   const normalizedClientSearch = deferredClientSearch.trim().toLowerCase();
+  const loanStatusDetails = prestamos.map((prestamo) => {
+    const overdueInfo = getLoanOverdueInfo({
+      createdAt: prestamo.createdAt,
+      frecuenciaPago: prestamo.frecuenciaPago,
+      cuotasPagadas: prestamo.cuotasPagadas,
+      saldoRestante: prestamo.saldoRestante,
+    });
+
+    return {
+      prestamo,
+      overdueInfo,
+      client: clientes.find((cliente) => cliente.id === prestamo.clienteId) ?? null,
+    };
+  });
+  const morosos = loanStatusDetails
+    .filter((item) => item.overdueInfo.isOverdue)
+    .sort((a, b) => b.overdueInfo.overdueDays - a.overdueInfo.overdueDays);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const vencimientosHoy = loanStatusDetails.filter((item) => {
+    if (item.prestamo.saldoRestante <= 0 || !item.overdueInfo.dueDate) {
+      return false;
+    }
+
+    return item.overdueInfo.dueDate.getTime() === todayStart.getTime();
+  });
+  const totalEnMora = morosos.reduce((sum, item) => sum + item.prestamo.saldoRestante, 0);
+  const prestamosClienteObservacion = prestamos.filter((prestamo) =>
+    observationForm.clienteId ? prestamo.clienteId === observationForm.clienteId : true,
+  );
+  const selectedPaymentLoan =
+    prestamos.find((prestamo) => prestamo.id === paymentForm.prestamoId) ?? null;
+  const selectedPaymentClient = selectedPaymentLoan
+    ? clientes.find((cliente) => cliente.id === selectedPaymentLoan.clienteId) ?? null
+    : null;
+  const partialPaymentAmount = Math.max(Number(partialPaymentInput || 0), 0);
+  const partialPaymentBase = selectedPaymentLoan
+    ? Math.min(partialPaymentAmount, selectedPaymentLoan.saldoRestante)
+    : 0;
+  const partialInterestRatio = selectedPaymentLoan
+    ? Math.max(selectedPaymentLoan.totalCobrar - selectedPaymentLoan.montoCapital, 0) /
+      Math.max(selectedPaymentLoan.totalCobrar, 1)
+    : 0;
+  const abonoInteres = roundCurrency(partialPaymentBase * partialInterestRatio);
+  const abonoCapital = roundCurrency(Math.max(partialPaymentBase - abonoInteres, 0));
+  const saldoDespuesAbono = selectedPaymentLoan
+    ? roundCurrency(Math.max(selectedPaymentLoan.saldoRestante - partialPaymentBase, 0))
+    : 0;
   const visibleClientes = clientes.filter((cliente) => {
     if (!normalizedClientSearch) {
       return true;
@@ -1873,6 +2015,7 @@ export default function Home() {
       .toLowerCase()
       .includes(normalizedClientSearch);
   });
+  const observacionesClienteDisponibles = visibleClientes;
   const paymentHistoryByClient = clientes
     .map((cliente) => {
       const pagosCliente = pagos
@@ -1908,13 +2051,45 @@ export default function Home() {
     null;
   const tabItems = [
     { id: "resumen", label: "Resumen" },
+    { id: "vencimientos", label: "Vencimientos de hoy" },
+    { id: "morosos", label: "Morosos" },
     { id: "clientes", label: "Clientes" },
     { id: "prestamos", label: "Prestamos" },
     { id: "pagos", label: "Pagos" },
     { id: "historial", label: "Historial de pago" },
+    { id: "observaciones", label: "Observaciones" },
     { id: "ganancias", label: "Ganancias" },
     { id: "configuracion", label: "Configuracion" },
   ] as const;
+  const tabGroups = [
+    {
+      label: "Operacion",
+      items: tabItems.filter((tab) => ["resumen", "clientes", "prestamos"].includes(tab.id)),
+    },
+    {
+      label: "Cobranza",
+      items: tabItems.filter((tab) =>
+        ["vencimientos", "morosos", "pagos", "historial"].includes(tab.id),
+      ),
+    },
+    {
+      label: "Control",
+      items: tabItems.filter((tab) => ["observaciones", "ganancias"].includes(tab.id)),
+    },
+    {
+      label: "Ajustes",
+      items: tabItems.filter((tab) => ["configuracion"].includes(tab.id)),
+    },
+  ] as const;
+
+  useEffect(() => {
+    const nextOpenGroup =
+      tabGroups.find((group) => group.items.some((tab) => tab.id === activeTab))?.label ?? "Operacion";
+
+    if (openTabGroup !== nextOpenGroup) {
+      setOpenTabGroup(nextOpenGroup);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (paymentHistoryByClient.length === 0) {
@@ -2488,20 +2663,63 @@ export default function Home() {
         </header>
 
         <section className="glass-panel rounded-[26px] p-3 sm:p-4">
-          <div className="hide-scrollbar flex gap-2 overflow-x-auto">
-            {tabItems.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`min-w-fit rounded-2xl px-4 py-3 text-sm font-bold transition ${
-                  activeTab === tab.id
-                    ? "brand-button text-white"
-                    : "bg-white text-slate-700 border border-slate-200"
-                }`}
+          <div className="hide-scrollbar flex gap-3 overflow-x-auto">
+            {tabGroups.map((group) => (
+              <div
+                key={group.label}
+                className="min-w-fit rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(247,250,252,0.92))] p-2 shadow-sm"
               >
-                {tab.label}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenTabGroup(group.label);
+
+                    if (group.items.length === 1) {
+                      setActiveTab(group.items[0].id);
+                    }
+                  }}
+                  className={`flex w-full items-center justify-between gap-3 rounded-[18px] px-3 py-3 text-left transition ${
+                    openTabGroup === group.label
+                      ? "bg-slate-900 text-white"
+                      : "bg-white text-slate-700"
+                  }`}
+                >
+                  <div>
+                    <p
+                      className={`text-[11px] font-black uppercase tracking-[0.22em] ${
+                        openTabGroup === group.label ? "text-white/70" : "text-slate-400"
+                      }`}
+                    >
+                      Seccion
+                    </p>
+                    <p className="mt-1 text-sm font-black">{group.label}</p>
+                  </div>
+                  {group.items.length > 1 ? (
+                    <span className="text-xs font-black uppercase tracking-[0.18em]">
+                      {openTabGroup === group.label ? "Abierto" : "Ver"}
+                    </span>
+                  ) : null}
+                </button>
+
+                {openTabGroup === group.label && group.items.length > 1 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {group.items.map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`min-w-fit rounded-2xl px-4 py-3 text-sm font-bold transition ${
+                          activeTab === tab.id
+                            ? "brand-button text-white"
+                            : "border border-slate-200 bg-white text-slate-700"
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             ))}
           </div>
         </section>
@@ -2677,6 +2895,186 @@ export default function Home() {
               </div>
             </article>
           </div>
+        </section>
+        ) : null}
+
+        {activeTab === "morosos" ? (
+        <section className="grid gap-4 xl:grid-cols-[0.36fr_1fr]">
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-rose-700">
+                Cobranza
+              </p>
+              <h2 className="section-title text-2xl font-black text-slate-900">
+                Panel de morosos
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Aqui se concentran los prestamos vencidos para priorizar cobro y medir el riesgo.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
+              <div className="rounded-[24px] bg-rose-50 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-rose-700">Clientes en mora</p>
+                <p className="mt-2 text-3xl font-black text-rose-900">{morosos.length}</p>
+              </div>
+              <div className="rounded-[24px] bg-amber-50 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-amber-700">Saldo comprometido</p>
+                <p className="mt-2 text-3xl font-black text-amber-900">{formatCurrency(totalEnMora)}</p>
+              </div>
+              <div className="rounded-[24px] bg-white/80 p-4 text-sm leading-6 text-slate-600">
+                Recomendacion: contacta primero a los que llevan mas dias de mora y tienen saldo mas alto.
+              </div>
+            </div>
+          </article>
+
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-rose-700">
+                Seguimiento
+              </p>
+              <h2 className="section-title text-2xl font-black text-slate-900">
+                Prestamos con atraso
+              </h2>
+            </div>
+
+            <div className="grid gap-3">
+              {morosos.length === 0 ? (
+                <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                  No hay prestamos morosos por ahora.
+                </div>
+              ) : null}
+
+              {morosos.map(({ prestamo, client, overdueInfo }) => (
+                <article
+                  key={prestamo.id}
+                  className="rounded-[24px] border border-white/60 bg-white/85 p-4 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-black text-slate-900">{client?.nombre ?? "Cliente"}</h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Frecuencia {getPaymentFrequencyLabel(prestamo.frecuenciaPago)} · proximo cobro{" "}
+                        {formatShortDate(overdueInfo.dueDate?.toISOString() ?? null)}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-rose-100 px-4 py-2 text-xs font-black uppercase tracking-[0.16em] text-rose-700">
+                      {overdueInfo.overdueDays} dia{overdueInfo.overdueDays === 1 ? "" : "s"} de mora
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Saldo</p>
+                      <p className="mt-2 font-black text-slate-900">{formatCurrency(prestamo.saldoRestante)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Cuota</p>
+                      <p className="mt-2 font-black text-slate-900">{formatCurrency(prestamo.valorCuota)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Pagadas</p>
+                      <p className="mt-2 font-black text-slate-900">
+                        {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Telefono</p>
+                      <p className="mt-2 font-black text-slate-900">{client?.telefono || "--"}</p>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </article>
+        </section>
+        ) : null}
+
+        {activeTab === "vencimientos" ? (
+        <section className="grid gap-4 xl:grid-cols-[0.36fr_1fr]">
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-amber-700">
+                Cobro diario
+              </p>
+              <h2 className="section-title text-2xl font-black text-slate-900">
+                Vencimientos de hoy
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Aqui ves a quien debes cobrar hoy y cuanto dinero esperas recaudar en la jornada.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
+              <div className="rounded-[24px] bg-amber-50 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-amber-700">Cobros de hoy</p>
+                <p className="mt-2 text-3xl font-black text-amber-900">{vencimientosHoy.length}</p>
+              </div>
+              <div className="rounded-[24px] bg-emerald-50 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-emerald-700">Esperado hoy</p>
+                <p className="mt-2 text-3xl font-black text-emerald-900">
+                  {formatCurrency(
+                    vencimientosHoy.reduce((sum, item) => sum + Math.min(item.prestamo.valorCuota, item.prestamo.saldoRestante), 0),
+                  )}
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-amber-700">
+                Agenda
+              </p>
+              <h2 className="section-title text-2xl font-black text-slate-900">
+                Clientes para cobrar hoy
+              </h2>
+            </div>
+
+            <div className="grid gap-3">
+              {vencimientosHoy.length === 0 ? (
+                <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                  Hoy no hay vencimientos pendientes segun la frecuencia configurada.
+                </div>
+              ) : null}
+
+              {vencimientosHoy.map(({ prestamo, client }) => (
+                <article
+                  key={prestamo.id}
+                  className="rounded-[24px] border border-white/60 bg-white/85 p-4 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-black text-slate-900">{client?.nombre ?? "Cliente"}</h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {getPaymentFrequencyLabel(prestamo.frecuenciaPago)} · telefono {client?.telefono || "--"}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-amber-100 px-4 py-2 text-xs font-black uppercase tracking-[0.16em] text-amber-700">
+                      Cobrar hoy
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Cuota</p>
+                      <p className="mt-2 font-black text-slate-900">{formatCurrency(prestamo.valorCuota)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Saldo</p>
+                      <p className="mt-2 font-black text-slate-900">{formatCurrency(prestamo.saldoRestante)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Progreso</p>
+                      <p className="mt-2 font-black text-slate-900">
+                        {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
+                      </p>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </article>
         </section>
         ) : null}
 
@@ -3628,6 +4026,60 @@ export default function Home() {
                   de cada cliente lo puedes consultar en la pestaña <strong>Historial de pago</strong>.
                 </div>
 
+                <div className="rounded-[24px] border border-sky-200 bg-sky-50/80 p-4">
+                  <div className="mb-3">
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-sky-700">
+                      Formula de abonos
+                    </p>
+                    <h3 className="mt-1 text-lg font-black text-slate-900">
+                      Simulador de abono parcial
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      Formula usada: interes del abono = abono x (interes total / total a cobrar).
+                      Capital del abono = abono - interes del abono.
+                    </p>
+                  </div>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Valor del abono</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={partialPaymentInput}
+                      onChange={(event) => setPartialPaymentInput(event.target.value)}
+                      className="h-13 rounded-2xl border border-sky-200 bg-white px-4 py-3 outline-none transition focus:border-sky-500"
+                      placeholder="50000"
+                    />
+                  </label>
+
+                  {selectedPaymentLoan ? (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Cliente</p>
+                        <p className="mt-2 font-black text-slate-900">
+                          {selectedPaymentClient?.nombre ?? "Cliente"}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-slate-400">A interes</p>
+                        <p className="mt-2 font-black text-slate-900">{formatCurrency(abonoInteres)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-slate-400">A capital</p>
+                        <p className="mt-2 font-black text-slate-900">{formatCurrency(abonoCapital)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Saldo luego del abono</p>
+                        <p className="mt-2 font-black text-slate-900">{formatCurrency(saldoDespuesAbono)}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm text-slate-500">
+                      Selecciona primero un prestamo para calcular el abono con capital e interes.
+                    </div>
+                  )}
+                </div>
+
                 <button
                   type="submit"
                   className="brand-button-dark h-13 rounded-2xl px-5 text-sm font-bold transition"
@@ -3792,6 +4244,133 @@ export default function Home() {
                 })}
               </div>
             )}
+          </article>
+        </section>
+        ) : null}
+
+        {activeTab === "observaciones" ? (
+        <section className="grid gap-4 xl:grid-cols-[0.42fr_1fr]">
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-sky-700">
+                Seguimiento
+              </p>
+              <h2 className="section-title text-2xl font-black text-slate-900">
+                Observaciones
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Guarda notas utiles para clientes y prestamos sin depender de tu memoria.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Cliente</span>
+                <select
+                  value={observationForm.clienteId}
+                  onChange={(event) => {
+                    const clienteId = event.target.value;
+                    setObservationForm((current) => ({
+                      ...current,
+                      clienteId,
+                      prestamoId: "",
+                      clienteObservacion: observationMetadata.clientes[clienteId] ?? "",
+                      prestamoObservacion: "",
+                    }));
+                  }}
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                >
+                  <option value="">Selecciona un cliente</option>
+                  {observacionesClienteDisponibles.map((cliente) => (
+                    <option key={cliente.id} value={cliente.id}>
+                      {cliente.nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Prestamo</span>
+                <select
+                  value={observationForm.prestamoId}
+                  onChange={(event) => {
+                    const prestamoId = event.target.value;
+                    setObservationForm((current) => ({
+                      ...current,
+                      prestamoId,
+                      prestamoObservacion: observationMetadata.prestamos[prestamoId] ?? "",
+                    }));
+                  }}
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                >
+                  <option value="">Selecciona un prestamo</option>
+                  {prestamosClienteObservacion.map((prestamo) => {
+                    const cliente =
+                      clientes.find((item) => item.id === prestamo.clienteId)?.nombre ?? "Cliente";
+
+                    return (
+                      <option key={prestamo.id} value={prestamo.id}>
+                        {cliente} - {formatCurrency(prestamo.montoCapital)} -{" "}
+                        {getPaymentFrequencyLabel(prestamo.frecuenciaPago)}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+
+              <button
+                type="button"
+                onClick={handleSaveObservations}
+                className="brand-button h-13 rounded-2xl px-5 text-sm font-bold transition"
+              >
+                Guardar observaciones
+              </button>
+            </div>
+          </article>
+
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-[24px] border border-slate-200 bg-white/80 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+                  Nota del cliente
+                </p>
+                <textarea
+                  rows={9}
+                  value={observationForm.clienteObservacion}
+                  onChange={(event) =>
+                    setObservationForm((current) => ({
+                      ...current,
+                      clienteObservacion: event.target.value,
+                    }))
+                  }
+                  placeholder="Ejemplo: solo paga en la tarde, cobra en la tienda, cliente cumplido..."
+                  className="mt-3 min-h-[220px] w-full rounded-[22px] border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-green-500"
+                />
+              </div>
+
+              <div className="rounded-[24px] border border-slate-200 bg-white/80 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+                  Nota del prestamo
+                </p>
+                <textarea
+                  rows={9}
+                  value={observationForm.prestamoObservacion}
+                  onChange={(event) =>
+                    setObservationForm((current) => ({
+                      ...current,
+                      prestamoObservacion: event.target.value,
+                    }))
+                  }
+                  placeholder="Ejemplo: ya aviso que paga manana, hacer seguimiento el viernes, revisar nuevo cupo..."
+                  className="mt-3 min-h-[220px] w-full rounded-[22px] border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-green-500"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-[24px] bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+              Estas observaciones se guardan en este dispositivo para ayudarte con el seguimiento
+              comercial sin modificar tu base actual.
+            </div>
           </article>
         </section>
         ) : null}
