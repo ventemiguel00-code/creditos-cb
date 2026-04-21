@@ -1397,7 +1397,7 @@ export default function Home() {
     const creditosEnDia =
       receiptData.prestamo.saldoRestante <= 0 ? "Prestamo completado" : "Al dia";
     const atrasos = creditosEnDia === "Al dia" ? "0" : "--";
-    const receiptWindow = window.open("", "_blank", "noopener,noreferrer");
+    const receiptWindow = window.open("", "_blank");
 
     if (!receiptWindow) {
       setScreenMessage("El navegador bloqueo la pestaña del recibo. Permite ventanas emergentes.");
