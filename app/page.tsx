@@ -612,6 +612,60 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (authStatus !== "signed_in") {
+      return;
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleRefresh = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      timeoutId = setTimeout(() => {
+        loadData().catch((error) => {
+          setScreenMessage(getErrorMessage(error));
+        });
+      }, 250);
+    };
+
+    const realtimeChannel = supabase
+      .channel("creditos-cb-live-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "clientes" },
+        scheduleRefresh,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "prestamos" },
+        scheduleRefresh,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "pagos" },
+        scheduleRefresh,
+      )
+      .subscribe();
+
+    const fallbackInterval = setInterval(() => {
+      void loadData().catch(() => {
+        // Silent fallback sync; realtime remains primary.
+      });
+    }, 30000);
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      clearInterval(fallbackInterval);
+      void supabase.removeChannel(realtimeChannel);
+    };
+  }, [authStatus]);
+
   async function initializeSupabaseAccess() {
     const { data } = await supabase.auth.getSession();
 
