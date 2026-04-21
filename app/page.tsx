@@ -3222,7 +3222,7 @@ export default function Home() {
                 {Number(loanForm.montoCapital) > 0 &&
                 Number(loanForm.numeroCuotas) > 0 &&
                 Number(loanForm.porcentajeInteres) >= 0 ? (
-                  <div className="rounded-[24px] bg-gradient-to-br from-green-700 via-green-600 to-sky-700 p-4 text-white">
+                  <div className="rounded-[26px] bg-gradient-to-br from-green-700 via-green-600 to-sky-700 p-4 text-white shadow-[0_24px_60px_rgba(12,88,61,0.24)]">
                     {(() => {
                       const preview = calculateLoanValues(
                         Number(loanForm.montoCapital),
@@ -3230,40 +3230,40 @@ export default function Home() {
                         normalizeIntegerPercentage(loanForm.porcentajeInteres),
                       );
 
+                      const previewItems = [
+                        {
+                          label: "Interes",
+                          value: `${preview.interestRatePercent}%`,
+                        },
+                        {
+                          label: "Total a cobrar",
+                          value: formatCurrency(preview.totalToCollect),
+                        },
+                        {
+                          label: "Valor cuota",
+                          value: formatCurrency(preview.installmentValue),
+                        },
+                        {
+                          label: "Frecuencia",
+                          value: getPaymentFrequencyLabel(loanForm.frecuenciaPago),
+                        },
+                      ];
+
                       return (
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
-                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
-                              Interes
-                            </p>
-                            <p className="mt-2 break-words text-3xl font-black leading-none">
-                              {preview.interestRatePercent}%
-                            </p>
-                          </div>
-                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
-                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
-                              Total a cobrar
-                            </p>
-                            <p className="mt-2 break-words text-3xl font-black leading-tight">
-                              {formatCurrency(preview.totalToCollect)}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
-                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
-                              Valor cuota
-                            </p>
-                            <p className="mt-2 break-words text-3xl font-black leading-tight">
-                              {formatCurrency(preview.installmentValue)}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl bg-white/10 p-3 backdrop-blur-sm">
-                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
-                              Frecuencia
-                            </p>
-                            <p className="mt-2 break-words text-3xl font-black leading-none">
-                              {getPaymentFrequencyLabel(loanForm.frecuenciaPago)}
-                            </p>
-                          </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {previewItems.map((item) => (
+                            <div
+                              key={item.label}
+                              className="rounded-[22px] border border-white/10 bg-white/10 p-4 backdrop-blur-sm"
+                            >
+                              <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
+                                {item.label}
+                              </p>
+                              <p className="mt-3 break-words text-[clamp(1.75rem,3vw,2.5rem)] font-black leading-[1.02] text-white">
+                                {item.value}
+                              </p>
+                            </div>
+                          ))}
                         </div>
                       );
                     })()}
