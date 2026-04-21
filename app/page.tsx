@@ -3105,19 +3105,18 @@ export default function Home() {
         ) : null}
 
         {activeTab === "prestamos" ? (
-        <section className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
-          <div className="flex flex-col gap-4">
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
-              <div className="mb-5">
+        <section className="grid gap-4">
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5">
+              <div className="max-w-3xl">
                 <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
                   Prestamos
                 </p>
-                <h2 className="section-title text-2xl font-black text-slate-900">
-                  Alta automatica del prestamo
-                </h2>
               </div>
+            </div>
 
-              <form onSubmit={handleCreateLoan} className="grid gap-3">
+            <form onSubmit={handleCreateLoan} className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr] xl:items-start">
+              <div className="grid gap-3">
                 <label className="flex flex-col gap-2">
                   <span className="text-sm font-semibold text-slate-700">Cliente</span>
                   <select
@@ -3218,224 +3217,228 @@ export default function Home() {
                     placeholder="20"
                   />
                 </label>
+              </div>
 
-                {Number(loanForm.montoCapital) > 0 &&
-                Number(loanForm.numeroCuotas) > 0 &&
-                Number(loanForm.porcentajeInteres) >= 0 ? (
-                  <div className="rounded-[26px] bg-gradient-to-br from-green-700 via-green-600 to-sky-700 p-4 text-white shadow-[0_24px_60px_rgba(12,88,61,0.24)]">
-                    {(() => {
-                      const preview = calculateLoanValues(
-                        Number(loanForm.montoCapital),
-                        Number(loanForm.numeroCuotas),
-                        normalizeIntegerPercentage(loanForm.porcentajeInteres),
-                      );
+              {Number(loanForm.montoCapital) > 0 &&
+              Number(loanForm.numeroCuotas) > 0 &&
+              Number(loanForm.porcentajeInteres) >= 0 ? (
+                <div className="rounded-[26px] bg-gradient-to-br from-green-700 via-green-600 to-sky-700 p-4 text-white shadow-[0_24px_60px_rgba(12,88,61,0.24)]">
+                  {(() => {
+                    const preview = calculateLoanValues(
+                      Number(loanForm.montoCapital),
+                      Number(loanForm.numeroCuotas),
+                      normalizeIntegerPercentage(loanForm.porcentajeInteres),
+                    );
 
-                      const previewItems = [
-                        {
-                          label: "Interes",
-                          value: `${preview.interestRatePercent}%`,
-                        },
-                        {
-                          label: "Total a cobrar",
-                          value: formatCurrency(preview.totalToCollect),
-                        },
-                        {
-                          label: "Valor cuota",
-                          value: formatCurrency(preview.installmentValue),
-                        },
-                        {
-                          label: "Frecuencia",
-                          value: getPaymentFrequencyLabel(loanForm.frecuenciaPago),
-                        },
-                      ];
+                    const previewItems = [
+                      {
+                        label: "Interes",
+                        value: `${preview.interestRatePercent}%`,
+                      },
+                      {
+                        label: "Total a cobrar",
+                        value: formatCurrency(preview.totalToCollect),
+                      },
+                      {
+                        label: "Valor cuota",
+                        value: formatCurrency(preview.installmentValue),
+                      },
+                      {
+                        label: "Frecuencia",
+                        value: getPaymentFrequencyLabel(loanForm.frecuenciaPago),
+                      },
+                    ];
 
-                      return (
-                        <div className="grid gap-3 md:grid-cols-2">
-                          {previewItems.map((item) => (
-                            <div
-                              key={item.label}
-                              className="rounded-[22px] border border-white/10 bg-white/10 p-4 backdrop-blur-sm"
-                            >
-                              <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
-                                {item.label}
-                              </p>
-                              <p className="mt-3 break-words text-[clamp(1.75rem,3vw,2.5rem)] font-black leading-[1.02] text-white">
-                                {item.value}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                ) : null}
+                    return (
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {previewItems.map((item) => (
+                          <div
+                            key={item.label}
+                            className="rounded-[22px] border border-white/10 bg-white/10 p-4 backdrop-blur-sm"
+                          >
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-200">
+                              {item.label}
+                            </p>
+                            <p className="mt-3 break-words text-[clamp(1.75rem,3vw,2.5rem)] font-black leading-[1.02] text-white">
+                              {item.value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <div className="rounded-[26px] border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
+                  Completa capital, cuotas, frecuencia e interes para ver el resumen del prestamo.
+                </div>
+              )}
 
+              <div className="xl:col-span-2">
                 <button
                   type="submit"
                   className="brand-button-secondary h-13 rounded-2xl px-5 text-sm font-bold transition"
                 >
                   Crear prestamo
                 </button>
-              </form>
-            </article>
-          </div>
+              </div>
+            </form>
+          </article>
 
-          <div className="flex flex-col gap-4">
-            <article className="glass-panel rounded-[30px] p-4 sm:p-5">
-              <div className="mb-5 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
-                    Prestamos
-                  </p>
-                  <h2 className="section-title text-2xl font-black text-slate-900">
-                    Vista de cobranza
-                  </h2>
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Prestamos
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Vista de cobranza
+                </h2>
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:hidden">
+              {prestamos.length === 0 ? (
+                <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
+                  Aun no hay prestamos registrados.
                 </div>
-              </div>
+              ) : null}
 
-              <div className="grid gap-3 lg:hidden">
-                {prestamos.length === 0 ? (
-                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
-                    Aun no hay prestamos registrados.
-                  </div>
-                ) : null}
+              {prestamos.map((prestamo) => {
+                const cliente =
+                  clientes.find((item) => item.id === prestamo.clienteId)?.nombre ?? "Cliente";
 
-                {prestamos.map((prestamo) => {
-                  const cliente =
-                    clientes.find((item) => item.id === prestamo.clienteId)?.nombre ?? "Cliente";
+                return (
+                  <article
+                    key={prestamo.id}
+                    className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-black text-slate-900">{cliente}</h3>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          {getLoanStatusLabel(prestamo)}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                        {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
+                      </span>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Capital</p>
+                        <p className="mt-2 font-bold">{formatCurrency(prestamo.montoCapital)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Interes</p>
+                        <p className="mt-2 font-bold">{prestamo.porcentajeInteres}%</p>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Cuota</p>
+                        <p className="mt-2 font-bold">{formatCurrency(prestamo.valorCuota)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Total</p>
+                        <p className="mt-2 font-bold">{formatCurrency(prestamo.totalCobrar)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Frecuencia</p>
+                        <p className="mt-2 font-bold">{getPaymentFrequencyLabel(prestamo.frecuenciaPago)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-yellow-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-yellow-700">Saldo</p>
+                        <p className="mt-2 font-bold text-yellow-900">
+                          {formatCurrency(prestamo.saldoRestante)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openLoanEditor(prestamo)}
+                        className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-bold text-sky-700 transition hover:bg-sky-100"
+                      >
+                        Editar prestamo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLoan(prestamo)}
+                        className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
+                      >
+                        Borrar prestamo
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
 
-                  return (
-                    <article
-                      key={prestamo.id}
-                      className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-lg font-black text-slate-900">{cliente}</h3>
-                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                            {getLoanStatusLabel(prestamo)}
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+            <div className="hidden overflow-hidden rounded-[24px] border border-slate-200 lg:block">
+              <table className="min-w-full bg-white/80">
+                <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
+                  <tr>
+                    <th className="px-4 py-3">Cliente</th>
+                    <th className="px-4 py-3">Capital</th>
+                    <th className="px-4 py-3">Interes</th>
+                    <th className="px-4 py-3">Total</th>
+                    <th className="px-4 py-3">Cuota</th>
+                    <th className="px-4 py-3">Frecuencia</th>
+                    <th className="px-4 py-3">Cuotas</th>
+                    <th className="px-4 py-3">Saldo</th>
+                    <th className="px-4 py-3">Estado</th>
+                    <th className="px-4 py-3">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {prestamos.map((prestamo) => {
+                    const cliente =
+                      clientes.find((item) => item.id === prestamo.clienteId)?.nombre ??
+                      "Cliente";
+
+                    return (
+                      <tr key={prestamo.id} className="border-t border-slate-100 text-sm">
+                        <td className="px-4 py-3 font-semibold text-slate-800">{cliente}</td>
+                        <td className="px-4 py-3">{formatCurrency(prestamo.montoCapital)}</td>
+                        <td className="px-4 py-3">{prestamo.porcentajeInteres}%</td>
+                        <td className="px-4 py-3">{formatCurrency(prestamo.totalCobrar)}</td>
+                        <td className="px-4 py-3">{formatCurrency(prestamo.valorCuota)}</td>
+                        <td className="px-4 py-3">{getPaymentFrequencyLabel(prestamo.frecuenciaPago)}</td>
+                        <td className="px-4 py-3">
                           {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
-                        </span>
-                      </div>
-                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                        <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Capital</p>
-                          <p className="mt-2 font-bold">{formatCurrency(prestamo.montoCapital)}</p>
-                        </div>
-                        <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Interes</p>
-                          <p className="mt-2 font-bold">{prestamo.porcentajeInteres}%</p>
-                        </div>
-                        <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Cuota</p>
-                          <p className="mt-2 font-bold">{formatCurrency(prestamo.valorCuota)}</p>
-                        </div>
-                        <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Total</p>
-                          <p className="mt-2 font-bold">{formatCurrency(prestamo.totalCobrar)}</p>
-                        </div>
-                        <div className="rounded-2xl bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Frecuencia</p>
-                          <p className="mt-2 font-bold">{getPaymentFrequencyLabel(prestamo.frecuenciaPago)}</p>
-                        </div>
-                        <div className="rounded-2xl bg-yellow-50 p-3">
-                          <p className="text-xs uppercase tracking-[0.2em] text-yellow-700">Saldo</p>
-                          <p className="mt-2 font-bold text-yellow-900">
-                            {formatCurrency(prestamo.saldoRestante)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-4 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openLoanEditor(prestamo)}
-                          className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-bold text-sky-700 transition hover:bg-sky-100"
-                        >
-                          Editar prestamo
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteLoan(prestamo)}
-                          className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
-                        >
-                          Borrar prestamo
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-
-              <div className="hidden overflow-hidden rounded-[24px] border border-slate-200 lg:block">
-                <table className="min-w-full bg-white/80">
-                  <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
-                    <tr>
-                      <th className="px-4 py-3">Cliente</th>
-                      <th className="px-4 py-3">Capital</th>
-                      <th className="px-4 py-3">Interes</th>
-                      <th className="px-4 py-3">Total</th>
-                      <th className="px-4 py-3">Cuota</th>
-                      <th className="px-4 py-3">Frecuencia</th>
-                      <th className="px-4 py-3">Cuotas</th>
-                      <th className="px-4 py-3">Saldo</th>
-                      <th className="px-4 py-3">Estado</th>
-                      <th className="px-4 py-3">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {prestamos.map((prestamo) => {
-                      const cliente =
-                        clientes.find((item) => item.id === prestamo.clienteId)?.nombre ??
-                        "Cliente";
-
-                      return (
-                        <tr key={prestamo.id} className="border-t border-slate-100 text-sm">
-                          <td className="px-4 py-3 font-semibold text-slate-800">{cliente}</td>
-                          <td className="px-4 py-3">{formatCurrency(prestamo.montoCapital)}</td>
-                          <td className="px-4 py-3">{prestamo.porcentajeInteres}%</td>
-                          <td className="px-4 py-3">{formatCurrency(prestamo.totalCobrar)}</td>
-                          <td className="px-4 py-3">{formatCurrency(prestamo.valorCuota)}</td>
-                          <td className="px-4 py-3">{getPaymentFrequencyLabel(prestamo.frecuenciaPago)}</td>
-                          <td className="px-4 py-3">
-                            {prestamo.cuotasPagadas}/{prestamo.numeroCuotas}
-                          </td>
-                          <td className="px-4 py-3 font-semibold text-yellow-800">
-                            {formatCurrency(prestamo.saldoRestante)}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
-                              {getLoanStatusLabel(prestamo)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => openLoanEditor(prestamo)}
-                                className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100"
-                              >
-                                Editar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteLoan(prestamo)}
-                                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
-                              >
-                                Borrar
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-          </div>
+                        </td>
+                        <td className="px-4 py-3 font-semibold text-yellow-800">
+                          {formatCurrency(prestamo.saldoRestante)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                            {getLoanStatusLabel(prestamo)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openLoanEditor(prestamo)}
+                              className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLoan(prestamo)}
+                              className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
+                            >
+                              Borrar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </article>
         </section>
         ) : null}
 
