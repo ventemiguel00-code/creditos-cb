@@ -392,6 +392,242 @@ function formatReceiptField(value: string | number | null | undefined) {
   return String(normalized);
 }
 
+function buildReceiptWindowHtml({
+  receiptData,
+  totalPagado,
+  saldoEnCuotas,
+  creditosEnDia,
+  atrasos,
+  logoUrl,
+}: {
+  receiptData: ReceiptData;
+  totalPagado: number;
+  saldoEnCuotas: number;
+  creditosEnDia: string;
+  atrasos: string;
+  logoUrl: string;
+}) {
+  const clientPhotoBlock = receiptData.cliente.fotoUrl
+    ? `
+      <div class="client-photo-row">
+        <img src="${receiptData.cliente.fotoUrl}" alt="${receiptData.cliente.nombre}" class="client-photo" />
+        <p>Foto del cliente incluida como soporte de este recibo.</p>
+      </div>
+    `
+    : "";
+
+  return `<!DOCTYPE html>
+  <html lang="es">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Recibo ${receiptData.cliente.nombre}</title>
+      <style>
+        * { box-sizing: border-box; }
+        body {
+          margin: 0;
+          padding: 24px;
+          font-family: Arial, Helvetica, sans-serif;
+          background: #f5f7fb;
+          color: #15213a;
+        }
+        .sheet {
+          max-width: 860px;
+          margin: 0 auto;
+          background: #fff;
+          border: 1px solid #d9e1ec;
+          border-radius: 24px;
+          padding: 20px;
+          box-shadow: 0 20px 40px rgba(21, 33, 58, 0.12);
+        }
+        .actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+        .actions button {
+          border: 0;
+          border-radius: 14px;
+          padding: 12px 18px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .print-btn { background: #15803d; color: white; }
+        .close-btn { background: #e5e7eb; color: #111827; }
+        .receipt {
+          overflow: hidden;
+          border: 1px solid #cbd5e1;
+          border-radius: 20px;
+        }
+        .logo-box {
+          border-bottom: 1px solid #cbd5e1;
+          background: white;
+          padding: 12px;
+          text-align: center;
+        }
+        .logo-wrap {
+          overflow: hidden;
+          border: 1px solid #bef264;
+          border-radius: 12px;
+          background: white;
+          padding: 4px;
+        }
+        .logo {
+          display: block;
+          width: 100%;
+          height: 170px;
+          object-fit: contain;
+          transform: scale(1.8);
+        }
+        .subtitle {
+          margin: 8px 0 0;
+          color: #64748b;
+          font-size: 12px;
+          letter-spacing: 0.24em;
+          text-transform: uppercase;
+        }
+        .row, .grid-2 {
+          display: grid;
+          border-bottom: 1px solid #cbd5e1;
+        }
+        .row { grid-template-columns: 1fr; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .cell {
+          padding: 10px 12px;
+          font-size: 14px;
+          color: #334155;
+        }
+        .grid-2 .cell:first-child {
+          border-right: 1px solid #cbd5e1;
+        }
+        .section-title {
+          padding: 10px 12px;
+          border-bottom: 1px solid #cbd5e1;
+          background: #f8fafc;
+          text-align: center;
+          font-size: 13px;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: #0f172a;
+        }
+        .section-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
+        .section-grid > div:first-child {
+          border-right: 1px solid #cbd5e1;
+        }
+        .line {
+          padding: 10px 12px;
+          border-bottom: 1px solid #e2e8f0;
+          font-size: 14px;
+          color: #334155;
+        }
+        .line:last-child { border-bottom: 0; }
+        .label {
+          font-weight: 800;
+          color: #0f172a;
+        }
+        .whatsapp {
+          text-align: center;
+          font-size: 28px;
+          font-weight: 900;
+          color: #15803d;
+          padding: 14px 12px;
+        }
+        .client-photo-row {
+          margin-top: 16px;
+          border: 1px dashed #cbd5e1;
+          border-radius: 16px;
+          background: #f8fafc;
+          padding: 12px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+          font-size: 14px;
+          color: #475569;
+        }
+        .client-photo {
+          width: 60px;
+          height: 60px;
+          border-radius: 999px;
+          object-fit: cover;
+          border: 4px solid #dcfce7;
+        }
+        .footer {
+          margin-top: 16px;
+          padding-top: 14px;
+          border-top: 1px dashed #cbd5e1;
+          text-align: center;
+          font-size: 12px;
+          color: #64748b;
+        }
+        @media print {
+          body { background: white; padding: 0; }
+          .sheet { box-shadow: none; border: 0; border-radius: 0; max-width: none; padding: 0; }
+          .actions { display: none; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="sheet">
+        <div class="actions">
+          <button class="print-btn" onclick="window.print()">Imprimir</button>
+          <button class="close-btn" onclick="window.close()">Cerrar</button>
+        </div>
+        <div class="receipt">
+          <div class="logo-box">
+            <div class="logo-wrap">
+              <img src="${logoUrl}" alt="${BRAND_NAME}" class="logo" />
+            </div>
+            <p class="subtitle">Recibo de pago</p>
+          </div>
+          <div class="row">
+            <div class="cell"><span class="label">Fecha:</span> ${formatDate(receiptData.pago.createdAt)}</div>
+          </div>
+          <div class="row">
+            <div class="cell"><span class="label">Valor cuota:</span> ${formatCurrency(receiptData.prestamo.valorCuota)}</div>
+          </div>
+          <div class="section-grid">
+            <div>
+              <div class="section-title">Datos cliente</div>
+              <div class="line"><span class="label">Nombre:</span> ${formatReceiptField(receiptData.cliente.nombre)}</div>
+              <div class="line"><span class="label">Direccion:</span> ${formatReceiptField(receiptData.cliente.direccion)}</div>
+            </div>
+            <div>
+              <div class="section-title">Extracto de manejo</div>
+              <div class="line"><span class="label">N de cuotas:</span> ${receiptData.prestamo.numeroCuotas}</div>
+              <div class="line"><span class="label">Saldo en cuotas:</span> ${saldoEnCuotas}</div>
+              <div class="line"><span class="label">Creditos en dias:</span> ${creditosEnDia}</div>
+            </div>
+          </div>
+          <div class="section-grid">
+            <div>
+              <div class="section-title">Prestamo</div>
+              <div class="line"><span class="label">Ultimo pago:</span> ${formatCurrency(receiptData.pago.monto)}</div>
+              <div class="line"><span class="label">Total pagado:</span> ${formatCurrency(totalPagado)}</div>
+              <div class="line"><span class="label">Fecha de pago:</span> ${formatDate(receiptData.pago.createdAt)}</div>
+              <div class="line"><span class="label">Saldo actual:</span> ${formatCurrency(Math.max(receiptData.prestamo.saldoRestante, 0))}</div>
+            </div>
+            <div>
+              <div class="section-title">Control</div>
+              <div class="line"><span class="label">Atrasos:</span> ${atrasos}</div>
+              <div class="line"><span class="label">Dominical:</span> --</div>
+              <div class="line"><span class="label">Telefono:</span> ${formatReceiptField(receiptData.cliente.telefono)}</div>
+              <div class="whatsapp">WhatsApp ${BUSINESS_PHONE}</div>
+            </div>
+          </div>
+        </div>
+        ${clientPhotoBlock}
+        <p class="footer">Gracias por su pago. Conserve este recibo como soporte.</p>
+      </div>
+    </body>
+  </html>`;
+}
+
 async function selectTableData(table: "clientes" | "prestamos" | "pagos") {
   const timestampColumns =
     table === "clientes"
@@ -1144,6 +1380,52 @@ export default function Home() {
     setScreenMessage("Reparto de ganancias actualizado correctamente.");
   }
 
+  function openReceiptPrintWindow(receiptData: ReceiptData) {
+    const totalPagado = roundCurrency(
+      pagos
+        .filter(
+          (pago) =>
+            pago.prestamoId === receiptData.prestamo.id &&
+            pago.cuotaNumero <= receiptData.pago.cuotaNumero,
+        )
+        .reduce((sum, pago) => sum + pago.monto, 0),
+    );
+    const saldoEnCuotas = Math.max(
+      receiptData.prestamo.numeroCuotas - receiptData.pago.cuotaNumero,
+      0,
+    );
+    const creditosEnDia =
+      receiptData.prestamo.saldoRestante <= 0 ? "Prestamo completado" : "Al dia";
+    const atrasos = creditosEnDia === "Al dia" ? "0" : "--";
+    const receiptWindow = window.open("", "_blank", "noopener,noreferrer");
+
+    if (!receiptWindow) {
+      setScreenMessage("El navegador bloqueo la pestaña del recibo. Permite ventanas emergentes.");
+      return;
+    }
+
+    receiptWindow.document.open();
+    receiptWindow.document.write(
+      buildReceiptWindowHtml({
+        receiptData,
+        totalPagado,
+        saldoEnCuotas,
+        creditosEnDia,
+        atrasos,
+        logoUrl: `${window.location.origin}/creditos-cb-logo.png`,
+      }),
+    );
+    receiptWindow.document.close();
+    receiptWindow.focus();
+    receiptWindow.onload = () => {
+      receiptWindow.print();
+    };
+  }
+
+  function handlePrintReceipt() {
+    window.print();
+  }
+
   function handleCompanyPercentageChange(value: string) {
     const empresa = normalizeClosedPercentage(value);
 
@@ -1221,13 +1503,15 @@ export default function Home() {
         estado: nuevoEstado,
       };
 
-      setPaymentForm({ prestamoId: "" });
-      await loadData();
-      setReceiptData({
+      const receiptPayload = {
         cliente,
         prestamo: prestamoActualizado,
         pago,
-      });
+      };
+
+      setPaymentForm({ prestamoId: "" });
+      await loadData();
+      openReceiptPrintWindow(receiptPayload);
       setScreenMessage("Pago registrado y recibo listo para imprimir.");
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
@@ -1266,7 +1550,7 @@ export default function Home() {
     );
     const saldoRestante = roundCurrency(Math.max(prestamo.totalCobrar - totalPagadoHastaRecibo, 0));
 
-    setReceiptData({
+    const receiptPayload = {
       cliente,
       pago,
       prestamo: {
@@ -1275,7 +1559,9 @@ export default function Home() {
         saldoRestante,
         estado: saldoRestante <= 0 ? "pagado" : prestamo.estado,
       },
-    });
+    };
+
+    openReceiptPrintWindow(receiptPayload);
     setScreenMessage("Recibo recuperado desde el historial.");
   }
 
@@ -1462,10 +1748,6 @@ export default function Home() {
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
     }
-  }
-
-  function handlePrintReceipt() {
-    window.print();
   }
 
   const capitalPrestado = prestamos.reduce((sum, prestamo) => sum + prestamo.montoCapital, 0);
