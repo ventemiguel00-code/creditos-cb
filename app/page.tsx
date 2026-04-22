@@ -15,6 +15,7 @@ import {
   formatCurrency,
   formatDate,
   formatShortDate,
+  getLoanPaymentSnapshot,
   getLoanOverdueInfo,
   roundCurrency,
 } from "@/lib/loan-utils";
@@ -40,6 +41,12 @@ type Prestamo = {
   valorCuota: number;
   saldoRestante: number;
   cuotasPagadas: number;
+  cuotaActual: number;
+  saldoCuotaActual: number;
+  moraPendiente: number;
+  diasMora: number;
+  totalCobrado: number;
+  totalCobradoMora: number;
   estado: string;
   createdAt: string;
 };
@@ -82,13 +89,23 @@ type ObservationMetadata = {
   prestamos: Record<string, string>;
 };
 
+type PaymentMetadata = Record<
+  string,
+  {
+    aplicadoPrestamo: number;
+    moraPagada: number;
+  }
+>;
+
 type ProfitPeriod = "diario" | "semanal" | "quincenal" | "mensual";
 
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
 const LAST_CLEANUP_RUN_KEY = "creditos-cb-last-cleanup-run";
 const LOAN_METADATA_KEY = "creditos-cb-loan-metadata";
 const OBSERVATION_METADATA_KEY = "creditos-cb-observations";
+const PAYMENT_METADATA_KEY = "creditos-cb-payment-metadata";
 const PROFIT_DISTRIBUTION_KEY = "creditos-cb-profit-distribution";
+const DAILY_LATE_RATE_KEY = "creditos-cb-daily-late-rate";
 const APP_CONFIG_TABLE = "configuracion_app";
 const APP_CONFIG_ROW_ID = "principal";
 const SUPABASE_LOGIN_EMAIL = process.env.NEXT_PUBLIC_SUPABASE_LOGIN_EMAIL ?? "";
@@ -103,6 +120,47 @@ const PAYMENT_FREQUENCIES: PaymentFrequency[] = [
   "mensual",
 ];
 const CLOSED_PERCENTAGE_OPTIONS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+function getTodayInputDate() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function createIsoDateFromInput(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+
+  if (!year || !month || !day) {
+    return new Date().toISOString();
+  }
+
+  return new Date(year, month - 1, day, 12, 0, 0, 0).toISOString();
+}
+
+function addFrequencyToInputDate(value: string, frequency: PaymentFrequency, count: number) {
+  const [year, month, day] = value.split("-").map(Number);
+
+  if (!year || !month || !day) {
+    return createIsoDateFromInput(getTodayInputDate());
+  }
+
+  const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+
+  if (frequency === "diaria") {
+    date.setDate(date.getDate() + count);
+  } else if (frequency === "semanal") {
+    date.setDate(date.getDate() + count * 7);
+  } else if (frequency === "quincenal") {
+    date.setDate(date.getDate() + count * 15);
+  } else {
+    date.setMonth(date.getMonth() + count);
+  }
+
+  return date.toISOString();
+}
 
 function mapCliente(row: Record<string, unknown>): Cliente {
   return {
@@ -245,6 +303,46 @@ function saveObservationMetadata(metadata: ObservationMetadata) {
   window.localStorage.setItem(OBSERVATION_METADATA_KEY, JSON.stringify(metadata));
 }
 
+function readPaymentMetadata(): PaymentMetadata {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PAYMENT_METADATA_KEY);
+    return raw ? (JSON.parse(raw) as PaymentMetadata) : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePaymentMetadata(metadata: PaymentMetadata) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(PAYMENT_METADATA_KEY, JSON.stringify(metadata));
+}
+
+function readDailyLateRate() {
+  if (typeof window === "undefined") {
+    return "2";
+  }
+
+  const raw = window.localStorage.getItem(DAILY_LATE_RATE_KEY) ?? "2";
+  const normalized = Math.max(Math.round(Number(raw || 0) * 100) / 100, 0);
+
+  return String(normalized);
+}
+
+function saveDailyLateRate(value: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(DAILY_LATE_RATE_KEY, value);
+}
+
 function readProfitDistribution() {
   if (typeof window === "undefined") {
     return {
@@ -304,6 +402,12 @@ function mapPrestamo(row: Record<string, unknown>): Prestamo {
     valorCuota: Number(row.valor_cuota ?? row.cuota_valor ?? 0),
     saldoRestante: totalCobrar,
     cuotasPagadas: 0,
+    cuotaActual: 1,
+    saldoCuotaActual: Number(row.valor_cuota ?? row.cuota_valor ?? 0),
+    moraPendiente: 0,
+    diasMora: 0,
+    totalCobrado: 0,
+    totalCobradoMora: 0,
     estado: String(row.estado ?? (totalCobrar <= 0 ? "pagado" : "activo")),
     createdAt: String(
       row.fecha_inicio ??
@@ -377,19 +481,12 @@ function isSchemaColumnError(message: string) {
 }
 
 function getLoanStatusLabel(prestamo: Prestamo) {
-  const overdueInfo = getLoanOverdueInfo({
-    createdAt: prestamo.createdAt,
-    frecuenciaPago: prestamo.frecuenciaPago,
-    cuotasPagadas: prestamo.cuotasPagadas,
-    saldoRestante: prestamo.saldoRestante,
-  });
-
   if (prestamo.saldoRestante <= 0) {
     return "Pago de prestamo completado";
   }
 
-  if (overdueInfo.isOverdue) {
-    return `Moroso - ${overdueInfo.overdueDays} dia${overdueInfo.overdueDays === 1 ? "" : "s"} de mora`;
+  if (prestamo.diasMora > 0) {
+    return `Moroso - ${prestamo.diasMora} dia${prestamo.diasMora === 1 ? "" : "s"} de mora`;
   }
 
   return "Al dia";
@@ -403,14 +500,7 @@ function getClientStatusLabel(clienteId: string, prestamos: Prestamo[]) {
   }
 
   const overdueDays = prestamosCliente.reduce((maxDays, prestamo) => {
-    const overdueInfo = getLoanOverdueInfo({
-      createdAt: prestamo.createdAt,
-      frecuenciaPago: prestamo.frecuenciaPago,
-      cuotasPagadas: prestamo.cuotasPagadas,
-      saldoRestante: prestamo.saldoRestante,
-    });
-
-    return overdueInfo.isOverdue ? Math.max(maxDays, overdueInfo.overdueDays) : maxDays;
+    return prestamo.diasMora > 0 ? Math.max(maxDays, prestamo.diasMora) : maxDays;
   }, 0);
 
   if (overdueDays > 0) {
@@ -831,6 +921,7 @@ export default function Home() {
     direccion: "",
     telefono: "",
     correo: "",
+    fechaIngreso: getTodayInputDate(),
   });
   const [loanForm, setLoanForm] = useState({
     clienteId: "",
@@ -838,6 +929,8 @@ export default function Home() {
     numeroCuotas: "",
     frecuenciaPago: "diaria" as PaymentFrequency,
     porcentajeInteres: "20",
+    fechaInicio: getTodayInputDate(),
+    cuotasPagadasIniciales: "0",
   });
   const [loanMetadata, setLoanMetadata] = useState<LoanMetadata>({});
   const [observationMetadata, setObservationMetadata] = useState<ObservationMetadata>({
@@ -848,7 +941,9 @@ export default function Home() {
   const [profitDistribution, setProfitDistribution] = useState(() => readProfitDistribution());
   const [paymentForm, setPaymentForm] = useState({
     prestamoId: "",
+    monto: "",
   });
+  const [dailyLateRateInput, setDailyLateRateInput] = useState(() => readDailyLateRate());
   const [selectedHistoryClientId, setSelectedHistoryClientId] = useState("");
   const [openTabGroup, setOpenTabGroup] = useState<"Operacion" | "Cobranza" | "Control" | "Ajustes">("Operacion");
   const [observationForm, setObservationForm] = useState({
@@ -1075,6 +1170,8 @@ export default function Home() {
     }
 
     const pagosMapped = (pagosResponse.data ?? []).map((row) => mapPago(row));
+    const dailyLateRate = Number(readDailyLateRate() || 0);
+    const paymentMetadata = readPaymentMetadata();
     const prestamosMapped = (prestamosResponse.data ?? []).map((row) => {
       const prestamoBase = mapPrestamo(row);
       const prestamo = {
@@ -1083,14 +1180,32 @@ export default function Home() {
           storedLoanMetadata[String(row.id ?? "")]?.frecuenciaPago ?? prestamoBase.frecuenciaPago,
       };
       const pagosPrestamo = pagosMapped.filter((pago) => pago.prestamoId === prestamo.id);
-      const totalPagado = roundCurrency(
-        pagosPrestamo.reduce((sum, pago) => sum + pago.monto, 0),
+      const paymentSnapshot = getLoanPaymentSnapshot({
+        createdAt: prestamo.createdAt,
+        frecuenciaPago: prestamo.frecuenciaPago,
+        numeroCuotas: prestamo.numeroCuotas,
+        valorCuota: prestamo.valorCuota,
+        totalCobrar: prestamo.totalCobrar,
+        pagos: pagosPrestamo.map((pago) => ({
+          ...pago,
+          aplicadoPrestamo: paymentMetadata[pago.id]?.aplicadoPrestamo,
+          moraPagada: paymentMetadata[pago.id]?.moraPagada,
+        })),
+        moraDiariaPorcentaje: dailyLateRate,
+      });
+      const saldoRestante = roundCurrency(
+        Math.max(prestamo.totalCobrar - paymentSnapshot.totalAplicadoPrestamo, 0),
       );
-      const saldoRestante = roundCurrency(Math.max(prestamo.totalCobrar - totalPagado, 0));
 
       return {
         ...prestamo,
-        cuotasPagadas: pagosPrestamo.length,
+        cuotasPagadas: paymentSnapshot.cuotasPagadas,
+        cuotaActual: paymentSnapshot.cuotaActual,
+        saldoCuotaActual: paymentSnapshot.saldoCuotaActual,
+        moraPendiente: paymentSnapshot.moraPendiente,
+        diasMora: paymentSnapshot.diasMora,
+        totalCobrado: paymentSnapshot.totalCobrado,
+        totalCobradoMora: paymentSnapshot.totalCobradoMora,
         saldoRestante,
         estado: saldoRestante <= 0 ? "pagado" : prestamo.estado,
       };
@@ -1327,6 +1442,7 @@ export default function Home() {
         nombre: clientForm.nombre.trim(),
         direccion: clientForm.direccion.trim(),
         telefono: clientForm.telefono.trim(),
+        fecha_registro: createIsoDateFromInput(clientForm.fechaIngreso),
       };
       const correo = clientForm.correo.trim();
       const foto = photoPreview.trim();
@@ -1370,6 +1486,7 @@ export default function Home() {
         direccion: "",
         telefono: "",
         correo: "",
+        fechaIngreso: getTodayInputDate(),
       });
       setPhotoPreview("");
       await loadData();
@@ -1396,12 +1513,18 @@ export default function Home() {
         );
       }
 
+      const cuotasPagadasIniciales = Math.min(
+        Math.max(Math.round(Number(loanForm.cuotasPagadasIniciales || 0)), 0),
+        numeroCuotas,
+      );
+
       const calculation = calculateLoanValues(capital, numeroCuotas, porcentajeInteres);
       const payload = {
         cliente_id: loanForm.clienteId,
         monto_prestado: calculation.capital,
         numero_cuotas: calculation.installmentCount,
-        estado: "activo",
+        fecha_inicio: createIsoDateFromInput(loanForm.fechaInicio),
+        estado: cuotasPagadasIniciales >= numeroCuotas ? "pagado" : "activo",
       };
 
       const payloads = [
@@ -1443,6 +1566,34 @@ export default function Home() {
         };
         saveLoanMetadata(nextMetadata);
         setLoanMetadata(nextMetadata);
+
+        if (cuotasPagadasIniciales > 0) {
+          const generatedPayments = Array.from({ length: cuotasPagadasIniciales }, (_, index) => ({
+            prestamo_id: createdLoanId,
+            monto_pagado: calculation.installmentValue,
+            cuota_numero: index + 1,
+            fecha_pago: addFrequencyToInputDate(loanForm.fechaInicio, frecuenciaPago, index),
+          }));
+          const { data: importedPayments, error: importedPaymentsError } = await supabase
+            .from("pagos")
+            .insert(generatedPayments)
+            .select("*");
+
+          if (importedPaymentsError) {
+            throw importedPaymentsError;
+          }
+
+          const nextPaymentMetadata = { ...readPaymentMetadata() };
+
+          (importedPayments ?? []).forEach((paymentRow) => {
+            nextPaymentMetadata[String(paymentRow.id ?? "")] = {
+              aplicadoPrestamo: calculation.installmentValue,
+              moraPagada: 0,
+            };
+          });
+
+          savePaymentMetadata(nextPaymentMetadata);
+        }
       }
 
       setLoanForm({
@@ -1451,9 +1602,15 @@ export default function Home() {
         numeroCuotas: "",
         frecuenciaPago: "diaria",
         porcentajeInteres: "20",
+        fechaInicio: getTodayInputDate(),
+        cuotasPagadasIniciales: "0",
       });
       await loadData();
-      setScreenMessage("Prestamo creado con el porcentaje calculado automaticamente.");
+      setScreenMessage(
+        cuotasPagadasIniciales > 0
+          ? "Prestamo importado con cuotas previas registradas."
+          : "Prestamo creado con el porcentaje calculado automaticamente.",
+      );
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
     }
@@ -1514,23 +1671,41 @@ export default function Home() {
     setScreenMessage("Reparto de ganancias actualizado correctamente.");
   }
 
+  function handleSaveDailyLateRate() {
+    const normalized = String(Math.max(Math.round(Number(dailyLateRateInput || 0) * 100) / 100, 0));
+    setDailyLateRateInput(normalized);
+    saveDailyLateRate(normalized);
+    void loadData().catch(() => {
+      // UI already keeps the new rate locally; reload is best-effort.
+    });
+    setScreenMessage("Mora diaria actualizada correctamente.");
+  }
+
   function openReceiptPrintWindow(receiptData: ReceiptData) {
     const totalPagado = roundCurrency(
-      pagos
-        .filter(
-          (pago) =>
-            pago.prestamoId === receiptData.prestamo.id &&
-            pago.cuotaNumero <= receiptData.pago.cuotaNumero,
-        )
-        .reduce((sum, pago) => sum + pago.monto, 0),
+      receiptData.prestamo.totalCobrado ||
+        pagos
+          .filter(
+            (pago) =>
+              pago.prestamoId === receiptData.prestamo.id &&
+              pago.cuotaNumero <= receiptData.pago.cuotaNumero,
+          )
+          .reduce((sum, pago) => sum + pago.monto, 0),
     );
     const saldoEnCuotas = Math.max(
       receiptData.prestamo.numeroCuotas - receiptData.pago.cuotaNumero,
       0,
     );
     const creditosEnDia =
-      receiptData.prestamo.saldoRestante <= 0 ? "Prestamo completado" : "Al dia";
-    const atrasos = creditosEnDia === "Al dia" ? "0" : "--";
+      receiptData.prestamo.saldoRestante <= 0
+        ? "Prestamo completado"
+        : receiptData.prestamo.diasMora > 0
+          ? "Moroso"
+          : "Al dia";
+    const atrasos =
+      receiptData.prestamo.diasMora > 0
+        ? `${receiptData.prestamo.diasMora} dia${receiptData.prestamo.diasMora === 1 ? "" : "s"}`
+        : "0";
     const receiptWindow = window.open("", "_blank");
 
     if (!receiptWindow) {
@@ -1631,9 +1806,26 @@ export default function Home() {
         throw new Error("No se encontro el cliente asociado al prestamo.");
       }
 
-      const cuotaNumero = prestamo.cuotasPagadas + 1;
-      const montoPago = Math.min(prestamo.valorCuota, prestamo.saldoRestante);
-      const nuevoSaldo = roundCurrency(prestamo.saldoRestante - montoPago);
+      const cuotaNumero = prestamo.cuotaActual;
+      const moraPendiente = prestamo.moraPendiente;
+      const saldoCuotaActual = prestamo.saldoCuotaActual;
+      const totalExigible = roundCurrency(moraPendiente + saldoCuotaActual);
+      const requestedAmount = Math.max(Number(paymentForm.monto || 0), 0);
+      const montoPago = requestedAmount > 0 ? Math.min(requestedAmount, totalExigible) : totalExigible;
+
+      if (montoPago <= 0) {
+        throw new Error("Ingresa un valor de pago o abono valido.");
+      }
+
+      const pagoMora = Math.min(montoPago, moraPendiente);
+      const pagoAplicadoPrestamo = roundCurrency(Math.max(montoPago - pagoMora, 0));
+      const cuotaCompletada = pagoAplicadoPrestamo + 0.0001 >= saldoCuotaActual;
+      const nuevoSaldo = roundCurrency(
+        Math.max(prestamo.saldoRestante - pagoAplicadoPrestamo, 0),
+      );
+      const nuevasCuotasPagadas = cuotaCompletada
+        ? Math.min(prestamo.cuotasPagadas + 1, prestamo.numeroCuotas)
+        : prestamo.cuotasPagadas;
       const nuevoEstado = nuevoSaldo <= 0 ? "pagado" : "activo";
 
       const { data: pagoData, error: pagoError } = await supabase
@@ -1661,14 +1853,49 @@ export default function Home() {
         throw updateError;
       }
 
+      const nextPaymentMetadata = {
+        ...readPaymentMetadata(),
+        [String(pagoData?.id ?? "")]: {
+          aplicadoPrestamo: pagoAplicadoPrestamo,
+          moraPagada: pagoMora,
+        },
+      };
+      savePaymentMetadata(nextPaymentMetadata);
+
       const pago = {
         ...mapPago(pagoData),
         clienteId: prestamo.clienteId,
       };
+      const paymentPreviewSnapshot = getLoanPaymentSnapshot({
+        createdAt: prestamo.createdAt,
+        frecuenciaPago: prestamo.frecuenciaPago,
+        numeroCuotas: prestamo.numeroCuotas,
+        valorCuota: prestamo.valorCuota,
+        totalCobrar: prestamo.totalCobrar,
+        moraDiariaPorcentaje: Number(readDailyLateRate() || 0),
+        pagos: [
+          ...pagos.filter((item) => item.prestamoId === prestamo.id).map((item) => ({
+            ...item,
+            aplicadoPrestamo: readPaymentMetadata()[item.id]?.aplicadoPrestamo,
+            moraPagada: readPaymentMetadata()[item.id]?.moraPagada,
+          })),
+          {
+            ...pago,
+            aplicadoPrestamo: pagoAplicadoPrestamo,
+            moraPagada: pagoMora,
+          },
+        ],
+      });
       const prestamoActualizado: Prestamo = {
         ...prestamo,
         saldoRestante: nuevoSaldo,
-        cuotasPagadas: cuotaNumero,
+        cuotasPagadas: paymentPreviewSnapshot.cuotasPagadas,
+        cuotaActual: paymentPreviewSnapshot.cuotaActual,
+        saldoCuotaActual: paymentPreviewSnapshot.saldoCuotaActual,
+        moraPendiente: paymentPreviewSnapshot.moraPendiente,
+        diasMora: paymentPreviewSnapshot.diasMora,
+        totalCobrado: paymentPreviewSnapshot.totalCobrado,
+        totalCobradoMora: paymentPreviewSnapshot.totalCobradoMora,
         estado: nuevoEstado,
       };
 
@@ -1678,10 +1905,16 @@ export default function Home() {
         pago,
       };
 
-      setPaymentForm({ prestamoId: "" });
+      setPaymentForm({ prestamoId: "", monto: "" });
       await loadData();
       openReceiptPrintWindow(receiptPayload);
-      setScreenMessage("Pago registrado y recibo listo para imprimir.");
+      setScreenMessage(
+        pagoMora > 0
+          ? "Pago registrado con mora y recibo listo para imprimir."
+          : cuotaCompletada
+            ? "Pago registrado y recibo listo para imprimir."
+            : "Abono parcial registrado y recibo listo para imprimir.",
+      );
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
     }
@@ -1702,6 +1935,7 @@ export default function Home() {
       return;
     }
 
+    const paymentMetadata = readPaymentMetadata();
     const pagosPrestamo = pagos
       .filter((item) => item.prestamoId === prestamo.id)
       .sort((left, right) => {
@@ -1711,20 +1945,38 @@ export default function Home() {
 
         return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
       });
-
-    const totalPagadoHastaRecibo = roundCurrency(
-      pagosPrestamo
-        .filter((item) => item.cuotaNumero <= pago.cuotaNumero)
-        .reduce((sum, item) => sum + item.monto, 0),
+    const currentPaymentIndex = pagosPrestamo.findIndex((item) => item.id === pago.id);
+    const pagosHastaRecibo =
+      currentPaymentIndex >= 0 ? pagosPrestamo.slice(0, currentPaymentIndex + 1) : pagosPrestamo;
+    const paymentSnapshot = getLoanPaymentSnapshot({
+      createdAt: prestamo.createdAt,
+      frecuenciaPago: prestamo.frecuenciaPago,
+      numeroCuotas: prestamo.numeroCuotas,
+      valorCuota: prestamo.valorCuota,
+      totalCobrar: prestamo.totalCobrar,
+      moraDiariaPorcentaje: Number(readDailyLateRate() || 0),
+      pagos: pagosHastaRecibo.map((item) => ({
+        ...item,
+        aplicadoPrestamo: paymentMetadata[item.id]?.aplicadoPrestamo,
+        moraPagada: paymentMetadata[item.id]?.moraPagada,
+      })),
+    });
+    const saldoRestante = roundCurrency(
+      Math.max(prestamo.totalCobrar - paymentSnapshot.totalAplicadoPrestamo, 0),
     );
-    const saldoRestante = roundCurrency(Math.max(prestamo.totalCobrar - totalPagadoHastaRecibo, 0));
 
     const receiptPayload = {
       cliente,
       pago,
       prestamo: {
         ...prestamo,
-        cuotasPagadas: Math.max(pago.cuotaNumero, 0),
+        cuotasPagadas: paymentSnapshot.cuotasPagadas,
+        cuotaActual: paymentSnapshot.cuotaActual,
+        saldoCuotaActual: paymentSnapshot.saldoCuotaActual,
+        moraPendiente: paymentSnapshot.moraPendiente,
+        diasMora: paymentSnapshot.diasMora,
+        totalCobrado: paymentSnapshot.totalCobrado,
+        totalCobradoMora: paymentSnapshot.totalCobradoMora,
         saldoRestante,
         estado: saldoRestante <= 0 ? "pagado" : prestamo.estado,
       },
@@ -1992,18 +2244,29 @@ export default function Home() {
   const selectedPaymentClient = selectedPaymentLoan
     ? clientes.find((cliente) => cliente.id === selectedPaymentLoan.clienteId) ?? null
     : null;
+  const totalDueSelectedLoan = selectedPaymentLoan
+    ? roundCurrency(selectedPaymentLoan.saldoCuotaActual + selectedPaymentLoan.moraPendiente)
+    : 0;
   const partialPaymentAmount = Math.max(Number(partialPaymentInput || 0), 0);
   const partialPaymentBase = selectedPaymentLoan
-    ? Math.min(partialPaymentAmount, selectedPaymentLoan.saldoRestante)
+    ? Math.min(partialPaymentAmount, totalDueSelectedLoan)
     : 0;
+  const partialLateFeePortion = selectedPaymentLoan
+    ? Math.min(partialPaymentBase, selectedPaymentLoan.moraPendiente)
+    : 0;
+  const partialPaymentAppliedToLoan = roundCurrency(
+    Math.max(partialPaymentBase - partialLateFeePortion, 0),
+  );
   const partialInterestRatio = selectedPaymentLoan
     ? Math.max(selectedPaymentLoan.totalCobrar - selectedPaymentLoan.montoCapital, 0) /
       Math.max(selectedPaymentLoan.totalCobrar, 1)
     : 0;
-  const abonoInteres = roundCurrency(partialPaymentBase * partialInterestRatio);
-  const abonoCapital = roundCurrency(Math.max(partialPaymentBase - abonoInteres, 0));
+  const abonoInteres = roundCurrency(partialPaymentAppliedToLoan * partialInterestRatio);
+  const abonoCapital = roundCurrency(
+    Math.max(partialPaymentAppliedToLoan - abonoInteres, 0),
+  );
   const saldoDespuesAbono = selectedPaymentLoan
-    ? roundCurrency(Math.max(selectedPaymentLoan.saldoRestante - partialPaymentBase, 0))
+    ? roundCurrency(Math.max(selectedPaymentLoan.saldoRestante - partialPaymentAppliedToLoan, 0))
     : 0;
   const visibleClientes = clientes.filter((cliente) => {
     if (!normalizedClientSearch) {
@@ -3260,6 +3523,29 @@ export default function Home() {
               <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                 Guardado en: {capitalStorageMode === "supabase" ? "Supabase" : "Solo este dispositivo"}
               </p>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">% mora diaria sobre faltante</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={dailyLateRateInput}
+                    onChange={(event) => setDailyLateRateInput(event.target.value)}
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder="2"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleSaveDailyLateRate}
+                  className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 transition hover:border-green-300 hover:text-green-700"
+                >
+                  Guardar mora diaria
+                </button>
+              </div>
             </article>
 
             <article className="glass-panel rounded-[30px] p-4 sm:p-5 xl:col-start-1 xl:row-start-1 self-start">
@@ -3455,6 +3741,22 @@ export default function Home() {
                   />
                 </label>
 
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Fecha de ingreso</span>
+                  <input
+                    type="date"
+                    value={clientForm.fechaIngreso}
+                    onChange={(event) =>
+                      setClientForm((current) => ({
+                        ...current,
+                        fechaIngreso: event.target.value,
+                      }))
+                    }
+                    required
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                  />
+                </label>
+
                 <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
                   <label className="flex flex-col gap-2">
                     <span className="text-sm font-semibold text-slate-700">
@@ -3495,6 +3797,11 @@ export default function Home() {
                 >
                   Guardar cliente
                 </button>
+
+                <div className="rounded-[22px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+                  Si el cliente viene de tu sistema anterior, aqui puedes cargar su fecha real de
+                  ingreso para conservar el historial como ya lo manejabas.
+                </div>
               </form>
             </article>
 
@@ -3710,6 +4017,45 @@ export default function Home() {
                   </label>
                 </div>
 
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Fecha de inicio</span>
+                    <input
+                      type="date"
+                      value={loanForm.fechaInicio}
+                      onChange={(event) =>
+                        setLoanForm((current) => ({
+                          ...current,
+                          fechaInicio: event.target.value,
+                        }))
+                      }
+                      required
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">
+                      Cuotas ya pagadas
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={loanForm.cuotasPagadasIniciales}
+                      onChange={(event) =>
+                        setLoanForm((current) => ({
+                          ...current,
+                          cuotasPagadasIniciales: String(
+                            Math.max(Math.round(Number(event.target.value || 0)), 0),
+                          ),
+                        }))
+                      }
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="0"
+                    />
+                  </label>
+                </div>
+
                 <label className="flex flex-col gap-2">
                   <span className="text-sm font-semibold text-slate-700">Frecuencia de pago</span>
                   <select
@@ -3753,6 +4099,11 @@ export default function Home() {
                     placeholder="20"
                   />
                 </label>
+
+                <div className="rounded-[22px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+                  Usa estos campos para importar prestamos antiguos: defines la fecha real de
+                  inicio, la frecuencia elegida y cuantas cuotas completas ya llevaba pagadas.
+                </div>
               </div>
 
               {Number(loanForm.montoCapital) > 0 &&
@@ -3998,7 +4349,12 @@ export default function Home() {
                   </span>
                   <select
                     value={paymentForm.prestamoId}
-                    onChange={(event) => setPaymentForm({ prestamoId: event.target.value })}
+                    onChange={(event) =>
+                      setPaymentForm((current) => ({
+                        ...current,
+                        prestamoId: event.target.value,
+                      }))
+                    }
                     required
                     className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                   >
@@ -4020,11 +4376,59 @@ export default function Home() {
                   </select>
                 </label>
 
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Valor a registrar</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={paymentForm.monto}
+                    onChange={(event) =>
+                      setPaymentForm((current) => ({
+                        ...current,
+                        monto: event.target.value,
+                      }))
+                    }
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder={
+                      selectedPaymentLoan
+                        ? String(totalDueSelectedLoan)
+                        : "Ingresa pago completo o abono parcial"
+                    }
+                  />
+                </label>
+
                 <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/70 p-4 text-sm leading-6 text-slate-600">
-                  El sistema registra una cuota completa por clic y genera el ticket imprimible
-                  con fecha, foto, valor del pago, cuota y saldo restante. El historial detallado
-                  de cada cliente lo puedes consultar en la pestaña <strong>Historial de pago</strong>.
+                  El sistema permite registrar cuota completa o abono parcial, cobra primero la
+                  mora pendiente sobre el faltante vencido y genera el ticket imprimible con fecha,
+                  foto, valor del pago, cuota y saldo restante. El historial detallado de cada
+                  cliente lo puedes consultar en la pestaña <strong>Historial de pago</strong>.
                 </div>
+
+                {selectedPaymentLoan ? (
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-[22px] bg-emerald-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-emerald-700">Cuota actual</p>
+                      <p className="mt-2 text-xl font-black text-emerald-900">#{selectedPaymentLoan.cuotaActual}</p>
+                    </div>
+                    <div className="rounded-[22px] bg-sky-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Faltante cuota</p>
+                      <p className="mt-2 text-xl font-black text-sky-900">{formatCurrency(selectedPaymentLoan.saldoCuotaActual)}</p>
+                    </div>
+                    <div className="rounded-[22px] bg-rose-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-rose-700">Mora pendiente</p>
+                      <p className="mt-2 text-xl font-black text-rose-900">{formatCurrency(selectedPaymentLoan.moraPendiente)}</p>
+                      <p className="mt-1 text-xs text-rose-700">
+                        {selectedPaymentLoan.diasMora > 0
+                          ? `${selectedPaymentLoan.diasMora} dia${selectedPaymentLoan.diasMora === 1 ? "" : "s"} de atraso`
+                          : "Sin mora"}
+                      </p>
+                    </div>
+                    <div className="rounded-[22px] bg-amber-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-amber-700">Total exigible</p>
+                      <p className="mt-2 text-xl font-black text-amber-900">{formatCurrency(totalDueSelectedLoan)}</p>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="rounded-[24px] border border-sky-200 bg-sky-50/80 p-4">
                   <div className="mb-3">
@@ -4035,8 +4439,9 @@ export default function Home() {
                       Simulador de abono parcial
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-slate-600">
-                      Formula usada: interes del abono = abono x (interes total / total a cobrar).
-                      Capital del abono = abono - interes del abono.
+                      Formula usada: primero se cubre la mora pendiente. Lo restante del abono se
+                      reparte asi: interes del abono = abono aplicado x (interes total / total a
+                      cobrar). Capital del abono = abono aplicado - interes del abono.
                     </p>
                   </div>
 
@@ -4053,12 +4458,20 @@ export default function Home() {
                   </label>
 
                   {selectedPaymentLoan ? (
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                       <div className="rounded-2xl bg-white p-3">
                         <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Cliente</p>
                         <p className="mt-2 font-black text-slate-900">
                           {selectedPaymentClient?.nombre ?? "Cliente"}
                         </p>
+                      </div>
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-slate-400">A mora</p>
+                        <p className="mt-2 font-black text-slate-900">{formatCurrency(partialLateFeePortion)}</p>
+                      </div>
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Aplicado a cuota</p>
+                        <p className="mt-2 font-black text-slate-900">{formatCurrency(partialPaymentAppliedToLoan)}</p>
                       </div>
                       <div className="rounded-2xl bg-white p-3">
                         <p className="text-xs uppercase tracking-[0.18em] text-slate-400">A interes</p>
