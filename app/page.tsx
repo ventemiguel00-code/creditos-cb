@@ -72,6 +72,10 @@ type LoanEditForm = {
   montoCapital: string;
   numeroCuotas: string;
   frecuenciaPago: PaymentFrequency;
+  porcentajeInteres: string;
+  fechaInicio: string;
+  cuotasPagadasIniciales: string;
+  abonoCuotaActualInicial: string;
   estado: string;
 };
 
@@ -2071,12 +2075,21 @@ export default function Home() {
   }
 
   function openLoanEditor(prestamo: Prestamo) {
+    const abonoActual =
+      prestamo.saldoRestante > 0 && prestamo.saldoCuotaActual < prestamo.valorCuota
+        ? roundCurrency(Math.max(prestamo.valorCuota - prestamo.saldoCuotaActual, 0))
+        : 0;
+
     setLoanEditForm({
       prestamoId: prestamo.id,
       clienteId: prestamo.clienteId,
       montoCapital: String(prestamo.montoCapital),
       numeroCuotas: String(prestamo.numeroCuotas),
       frecuenciaPago: prestamo.frecuenciaPago,
+      porcentajeInteres: String(normalizeIntegerPercentage(prestamo.porcentajeInteres)),
+      fechaInicio: prestamo.createdAt ? prestamo.createdAt.slice(0, 10) : getTodayInputDate(),
+      cuotasPagadasIniciales: String(prestamo.cuotasPagadas),
+      abonoCuotaActualInicial: String(abonoActual),
       estado: prestamo.estado,
     });
   }
@@ -2094,16 +2107,38 @@ export default function Home() {
       const montoPrestado = Number(loanEditForm.montoCapital);
       const numeroCuotas = Number(loanEditForm.numeroCuotas);
       const frecuenciaPago = normalizePaymentFrequency(loanEditForm.frecuenciaPago);
+      const porcentajeInteres = normalizeIntegerPercentage(loanEditForm.porcentajeInteres);
 
-      if (!loanEditForm.clienteId || montoPrestado <= 0 || numeroCuotas <= 0) {
-        throw new Error("Debes completar cliente, monto y cuotas validas.");
+      if (
+        !loanEditForm.clienteId ||
+        montoPrestado <= 0 ||
+        numeroCuotas <= 0 ||
+        porcentajeInteres < 0
+      ) {
+        throw new Error("Debes completar cliente, monto, cuotas e interes validos.");
       }
 
+      const calculation = calculateLoanValues(montoPrestado, numeroCuotas, porcentajeInteres);
+      const cuotasPagadasIniciales = Math.min(
+        Math.max(Math.round(Number(loanEditForm.cuotasPagadasIniciales || 0)), 0),
+        numeroCuotas,
+      );
+      const abonoCuotaActualInicial =
+        cuotasPagadasIniciales >= numeroCuotas
+          ? 0
+          : Math.min(
+              Math.max(Number(loanEditForm.abonoCuotaActualInicial || 0), 0),
+              calculation.installmentValue,
+            );
       const payload = {
         cliente_id: loanEditForm.clienteId,
-        monto_prestado: montoPrestado,
-        numero_cuotas: numeroCuotas,
-        estado: loanEditForm.estado || "activo",
+        monto_prestado: calculation.capital,
+        numero_cuotas: calculation.installmentCount,
+        fecha_inicio: createIsoDateFromInput(loanEditForm.fechaInicio),
+        estado:
+          cuotasPagadasIniciales >= numeroCuotas && abonoCuotaActualInicial <= 0
+            ? "pagado"
+            : loanEditForm.estado || "activo",
       };
 
       const payloads = [
@@ -2146,12 +2181,80 @@ export default function Home() {
       saveLoanMetadata(nextMetadata);
       setLoanMetadata(nextMetadata);
 
+      const existingPayments = pagos.filter((pago) => pago.prestamoId === loanEditForm.prestamoId);
+
+      if (existingPayments.length > 0) {
+        const existingPaymentIds = existingPayments.map((pago) => pago.id);
+        const { error: deletePaymentsError } = await supabase
+          .from("pagos")
+          .delete()
+          .eq("prestamo_id", loanEditForm.prestamoId);
+
+        if (deletePaymentsError) {
+          throw deletePaymentsError;
+        }
+
+        const nextPaymentMetadata = { ...readPaymentMetadata() };
+        existingPaymentIds.forEach((paymentId) => {
+          delete nextPaymentMetadata[paymentId];
+        });
+        savePaymentMetadata(nextPaymentMetadata);
+      }
+
+      if (cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0) {
+        const generatedPayments = Array.from({ length: cuotasPagadasIniciales }, (_, index) => ({
+          prestamo_id: loanEditForm.prestamoId,
+          monto_pagado: calculation.installmentValue,
+          cuota_numero: index + 1,
+          fecha_pago: addFrequencyToInputDate(loanEditForm.fechaInicio, frecuenciaPago, index),
+        }));
+
+        if (abonoCuotaActualInicial > 0) {
+          generatedPayments.push({
+            prestamo_id: loanEditForm.prestamoId,
+            monto_pagado: abonoCuotaActualInicial,
+            cuota_numero: cuotasPagadasIniciales + 1,
+            fecha_pago: addFrequencyToInputDate(
+              loanEditForm.fechaInicio,
+              frecuenciaPago,
+              cuotasPagadasIniciales,
+            ),
+          });
+        }
+
+        const { data: importedPayments, error: importedPaymentsError } = await supabase
+          .from("pagos")
+          .insert(generatedPayments)
+          .select("*");
+
+        if (importedPaymentsError) {
+          throw importedPaymentsError;
+        }
+
+        const nextPaymentMetadata = { ...readPaymentMetadata() };
+
+        (importedPayments ?? []).forEach((paymentRow) => {
+          const cuotaNumero = Number(paymentRow.cuota_numero ?? 0);
+          const isPartialImportedPayment =
+            abonoCuotaActualInicial > 0 && cuotaNumero === cuotasPagadasIniciales + 1;
+
+          nextPaymentMetadata[String(paymentRow.id ?? "")] = {
+            aplicadoPrestamo: isPartialImportedPayment
+              ? abonoCuotaActualInicial
+              : calculation.installmentValue,
+            moraPagada: 0,
+          };
+        });
+
+        savePaymentMetadata(nextPaymentMetadata);
+      }
+
       if (loanEditForm) {
         setLoanEditForm(null);
       }
 
       await loadData();
-      setScreenMessage("Prestamo actualizado correctamente.");
+      setScreenMessage("Prestamo actualizado con historial base reconstruido correctamente.");
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
     }
@@ -2647,6 +2750,20 @@ export default function Home() {
               </label>
 
               <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Fecha de inicio</span>
+                <input
+                  type="date"
+                  value={loanEditForm.fechaInicio}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current ? { ...current, fechaInicio: event.target.value } : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <label className="flex flex-col gap-2">
                 <span className="text-sm font-semibold text-slate-700">Monto prestado</span>
                 <input
                   type="number"
@@ -2677,6 +2794,30 @@ export default function Home() {
               </label>
 
               <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Porcentaje de interes</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={loanEditForm.porcentajeInteres}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            porcentajeInteres: String(
+                              normalizeIntegerPercentage(event.target.value),
+                            ),
+                          }
+                        : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <label className="flex flex-col gap-2">
                 <span className="text-sm font-semibold text-slate-700">Frecuencia de pago</span>
                 <select
                   value={loanEditForm.frecuenciaPago}
@@ -2699,6 +2840,58 @@ export default function Home() {
                   ))}
                 </select>
               </label>
+
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Cuotas ya pagadas</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={loanEditForm.cuotasPagadasIniciales}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            cuotasPagadasIniciales: String(
+                              Math.max(Math.round(Number(event.target.value || 0)), 0),
+                            ),
+                          }
+                        : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <label className="flex flex-col gap-2 md:col-span-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  Abono ya realizado en la cuota actual
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  value={loanEditForm.abonoCuotaActualInicial}
+                  onChange={(event) =>
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            abonoCuotaActualInicial: String(
+                              Math.max(Number(event.target.value || 0), 0),
+                            ),
+                          }
+                        : current,
+                    )
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <div className="md:col-span-2 rounded-[22px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+                Si cambias estos datos historicos, el sistema vuelve a construir el historial base
+                del prestamo para que el saldo, cuotas y mora queden alineados con ese nuevo punto
+                de partida.
+              </div>
 
               <div className="md:col-span-2 flex flex-wrap gap-3">
                 <button
