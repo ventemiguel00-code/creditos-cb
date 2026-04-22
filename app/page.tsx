@@ -931,6 +931,7 @@ export default function Home() {
     porcentajeInteres: "20",
     fechaInicio: getTodayInputDate(),
     cuotasPagadasIniciales: "0",
+    abonoCuotaActualInicial: "0",
   });
   const [loanMetadata, setLoanMetadata] = useState<LoanMetadata>({});
   const [observationMetadata, setObservationMetadata] = useState<ObservationMetadata>({
@@ -1513,12 +1514,18 @@ export default function Home() {
         );
       }
 
+      const calculation = calculateLoanValues(capital, numeroCuotas, porcentajeInteres);
       const cuotasPagadasIniciales = Math.min(
         Math.max(Math.round(Number(loanForm.cuotasPagadasIniciales || 0)), 0),
         numeroCuotas,
       );
-
-      const calculation = calculateLoanValues(capital, numeroCuotas, porcentajeInteres);
+      const abonoCuotaActualInicial =
+        cuotasPagadasIniciales >= numeroCuotas
+          ? 0
+          : Math.min(
+              Math.max(Number(loanForm.abonoCuotaActualInicial || 0), 0),
+              calculation.installmentValue,
+            );
       const payload = {
         cliente_id: loanForm.clienteId,
         monto_prestado: calculation.capital,
@@ -1567,13 +1574,27 @@ export default function Home() {
         saveLoanMetadata(nextMetadata);
         setLoanMetadata(nextMetadata);
 
-        if (cuotasPagadasIniciales > 0) {
+        if (cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0) {
           const generatedPayments = Array.from({ length: cuotasPagadasIniciales }, (_, index) => ({
             prestamo_id: createdLoanId,
             monto_pagado: calculation.installmentValue,
             cuota_numero: index + 1,
             fecha_pago: addFrequencyToInputDate(loanForm.fechaInicio, frecuenciaPago, index),
           }));
+
+          if (abonoCuotaActualInicial > 0) {
+            generatedPayments.push({
+              prestamo_id: createdLoanId,
+              monto_pagado: abonoCuotaActualInicial,
+              cuota_numero: cuotasPagadasIniciales + 1,
+              fecha_pago: addFrequencyToInputDate(
+                loanForm.fechaInicio,
+                frecuenciaPago,
+                cuotasPagadasIniciales,
+              ),
+            });
+          }
+
           const { data: importedPayments, error: importedPaymentsError } = await supabase
             .from("pagos")
             .insert(generatedPayments)
@@ -1586,8 +1607,13 @@ export default function Home() {
           const nextPaymentMetadata = { ...readPaymentMetadata() };
 
           (importedPayments ?? []).forEach((paymentRow) => {
+            const cuotaNumero = Number(paymentRow.cuota_numero ?? 0);
+            const isPartialImportedPayment =
+              abonoCuotaActualInicial > 0 && cuotaNumero === cuotasPagadasIniciales + 1;
             nextPaymentMetadata[String(paymentRow.id ?? "")] = {
-              aplicadoPrestamo: calculation.installmentValue,
+              aplicadoPrestamo: isPartialImportedPayment
+                ? abonoCuotaActualInicial
+                : calculation.installmentValue,
               moraPagada: 0,
             };
           });
@@ -1604,11 +1630,12 @@ export default function Home() {
         porcentajeInteres: "20",
         fechaInicio: getTodayInputDate(),
         cuotasPagadasIniciales: "0",
+        abonoCuotaActualInicial: "0",
       });
       await loadData();
       setScreenMessage(
-        cuotasPagadasIniciales > 0
-          ? "Prestamo importado con cuotas previas registradas."
+        cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0
+          ? "Prestamo importado con avance previo registrado."
           : "Prestamo creado con el porcentaje calculado automaticamente.",
       );
     } catch (error) {
@@ -4057,6 +4084,27 @@ export default function Home() {
                 </div>
 
                 <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">
+                    Abono ya realizado en la cuota actual
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={loanForm.abonoCuotaActualInicial}
+                    onChange={(event) =>
+                      setLoanForm((current) => ({
+                        ...current,
+                        abonoCuotaActualInicial: String(
+                          Math.max(Number(event.target.value || 0), 0),
+                        ),
+                      }))
+                    }
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                    placeholder="0"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-2">
                   <span className="text-sm font-semibold text-slate-700">Frecuencia de pago</span>
                   <select
                     value={loanForm.frecuenciaPago}
@@ -4102,7 +4150,8 @@ export default function Home() {
 
                 <div className="rounded-[22px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
                   Usa estos campos para importar prestamos antiguos: defines la fecha real de
-                  inicio, la frecuencia elegida y cuantas cuotas completas ya llevaba pagadas.
+                  inicio, la frecuencia elegida, cuantas cuotas completas ya llevaba pagadas y
+                  cuanto llevaba abonado en la cuota actual.
                 </div>
               </div>
 
