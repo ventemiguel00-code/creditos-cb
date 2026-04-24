@@ -846,6 +846,45 @@ async function selectTableData(table: "clientes" | "prestamos" | "pagos") {
   return supabase.from(table).select("*");
 }
 
+async function findRecentLoanId({
+  clienteId,
+  montoPrestado,
+  numeroCuotas,
+}: {
+  clienteId: string;
+  montoPrestado: number;
+  numeroCuotas: number;
+}) {
+  const candidateDateColumns = ["fecha_inicio", "created_at", "fecha_creacion", "fecha"];
+
+  for (const column of candidateDateColumns) {
+    const response = await supabase
+      .from("prestamos")
+      .select("*")
+      .eq("cliente_id", clienteId)
+      .eq("monto_prestado", montoPrestado)
+      .eq("numero_cuotas", numeroCuotas)
+      .order(column, { ascending: false })
+      .limit(5);
+
+    if (response.error) {
+      if (isSchemaColumnError(response.error.message)) {
+        continue;
+      }
+
+      throw response.error;
+    }
+
+    const matchedLoan = (response.data ?? []).find((row) => String(row.id ?? "").trim() !== "");
+
+    if (matchedLoan) {
+      return String(matchedLoan.id ?? "");
+    }
+  }
+
+  return "";
+}
+
 async function loadInitialCapitalValue() {
   const localFallback =
     typeof window === "undefined"
@@ -1577,6 +1616,14 @@ export default function Home() {
 
       if (lastError) {
         throw lastError;
+      }
+
+      if (!createdLoanId) {
+        createdLoanId = await findRecentLoanId({
+          clienteId: loanForm.clienteId,
+          montoPrestado: calculation.capital,
+          numeroCuotas: calculation.installmentCount,
+        });
       }
 
       if (createdLoanId) {
