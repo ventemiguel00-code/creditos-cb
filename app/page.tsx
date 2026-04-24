@@ -2151,6 +2151,14 @@ export default function Home() {
       abonoCuotaActualInicial: String(abonoActual),
       estado: prestamo.estado,
     });
+    setActiveTab("prestamos");
+    setScreenMessage(`Editando prestamo de ${clientes.find((cliente) => cliente.id === prestamo.clienteId)?.nombre ?? "cliente"}.`);
+
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
   }
 
   async function handleUpdateLoan(event: FormEvent<HTMLFormElement>) {
