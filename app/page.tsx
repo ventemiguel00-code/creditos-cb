@@ -167,6 +167,24 @@ function addFrequencyToInputDate(value: string, frequency: PaymentFrequency, cou
   return date.toISOString();
 }
 
+function getMetadataDateKey(value?: string | null) {
+  return String(value ?? "").slice(0, 10);
+}
+
+function buildLoanMetadataKey({
+  clienteId,
+  montoCapital,
+  numeroCuotas,
+  fechaInicio,
+}: {
+  clienteId: string;
+  montoCapital: number;
+  numeroCuotas: number;
+  fechaInicio?: string | null;
+}) {
+  return `draft:${clienteId}:${roundCurrency(montoCapital)}:${numeroCuotas}:${getMetadataDateKey(fechaInicio)}`;
+}
+
 function mapCliente(row: Record<string, unknown>): Cliente {
   return {
     id: String(row.id ?? ""),
@@ -1194,6 +1212,8 @@ export default function Home() {
   async function loadData() {
     setScreenMessage("");
     const storedLoanMetadata = readLoanMetadata();
+    const nextStoredLoanMetadata = { ...storedLoanMetadata };
+    let shouldPersistLoanMetadata = false;
 
     const [clientesResponse, prestamosResponse, pagosResponse, initialCapitalResponse] = await Promise.all([
       selectTableData("clientes"),
@@ -1218,8 +1238,22 @@ export default function Home() {
     const dailyLateRate = Number(readDailyLateRate() || 0);
     const paymentMetadata = readPaymentMetadata();
     const prestamosMapped = (prestamosResponse.data ?? []).map((row) => {
-      const metadata = storedLoanMetadata[String(row.id ?? "")];
       const prestamoBase = mapPrestamo(row);
+      const loanId = String(row.id ?? prestamoBase.id ?? "");
+      const fallbackMetadataKey = buildLoanMetadataKey({
+        clienteId: prestamoBase.clienteId,
+        montoCapital: prestamoBase.montoCapital,
+        numeroCuotas: prestamoBase.numeroCuotas,
+        fechaInicio: prestamoBase.createdAt,
+      });
+      const metadata = storedLoanMetadata[loanId] ?? storedLoanMetadata[fallbackMetadataKey];
+
+      if (!storedLoanMetadata[loanId] && storedLoanMetadata[fallbackMetadataKey]) {
+        nextStoredLoanMetadata[loanId] = storedLoanMetadata[fallbackMetadataKey];
+        delete nextStoredLoanMetadata[fallbackMetadataKey];
+        shouldPersistLoanMetadata = true;
+      }
+
       const porcentajeInteres = metadata?.porcentajeInteres ?? prestamoBase.porcentajeInteres;
       const calculation = calculateLoanValues(
         prestamoBase.montoCapital,
@@ -1280,7 +1314,12 @@ export default function Home() {
     setClientes((clientesResponse.data ?? []).map((row) => mapCliente(row)));
     setPrestamos(prestamosMapped);
     setPagos(pagosEnriched);
-    setLoanMetadata(storedLoanMetadata);
+    if (shouldPersistLoanMetadata) {
+      saveLoanMetadata(nextStoredLoanMetadata);
+      setLoanMetadata(nextStoredLoanMetadata);
+    } else {
+      setLoanMetadata(storedLoanMetadata);
+    }
     setInitialCapitalInput(String(initialCapitalResponse.value));
     setCapitalStorageMode(initialCapitalResponse.source);
   }
@@ -1594,6 +1633,12 @@ export default function Home() {
         { ...payload, modalidad_pago: frecuenciaPago },
         payload,
       ];
+      const pendingMetadataKey = buildLoanMetadataKey({
+        clienteId: loanForm.clienteId,
+        montoCapital: calculation.capital,
+        numeroCuotas: calculation.installmentCount,
+        fechaInicio: createIsoDateFromInput(loanForm.fechaInicio),
+      });
 
       let createdLoanId = "";
       let lastError: Error | null = null;
@@ -1626,17 +1671,22 @@ export default function Home() {
         });
       }
 
-      if (createdLoanId) {
-        const nextMetadata = {
-          ...readLoanMetadata(),
-          [createdLoanId]: {
-            frecuenciaPago,
-            porcentajeInteres,
-          },
-        };
-        saveLoanMetadata(nextMetadata);
-        setLoanMetadata(nextMetadata);
+      const nextMetadata = {
+        ...readLoanMetadata(),
+        [createdLoanId || pendingMetadataKey]: {
+          frecuenciaPago,
+          porcentajeInteres,
+        },
+      };
 
+      if (createdLoanId && nextMetadata[pendingMetadataKey]) {
+        delete nextMetadata[pendingMetadataKey];
+      }
+
+      saveLoanMetadata(nextMetadata);
+      setLoanMetadata(nextMetadata);
+
+      if (createdLoanId) {
         if (cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0) {
           const generatedPayments = Array.from({ length: cuotasPagadasIniciales }, (_, index) => ({
             prestamo_id: createdLoanId,
