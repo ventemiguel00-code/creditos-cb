@@ -85,6 +85,7 @@ type LoanMetadata = Record<
   string,
   {
     frecuenciaPago: PaymentFrequency;
+    porcentajeInteres?: number;
   }
 >;
 
@@ -1178,11 +1179,21 @@ export default function Home() {
     const dailyLateRate = Number(readDailyLateRate() || 0);
     const paymentMetadata = readPaymentMetadata();
     const prestamosMapped = (prestamosResponse.data ?? []).map((row) => {
+      const metadata = storedLoanMetadata[String(row.id ?? "")];
       const prestamoBase = mapPrestamo(row);
+      const porcentajeInteres = metadata?.porcentajeInteres ?? prestamoBase.porcentajeInteres;
+      const calculation = calculateLoanValues(
+        prestamoBase.montoCapital,
+        prestamoBase.numeroCuotas,
+        porcentajeInteres,
+      );
       const prestamo = {
         ...prestamoBase,
-        frecuenciaPago:
-          storedLoanMetadata[String(row.id ?? "")]?.frecuenciaPago ?? prestamoBase.frecuenciaPago,
+        frecuenciaPago: metadata?.frecuenciaPago ?? prestamoBase.frecuenciaPago,
+        porcentajeInteres,
+        totalCobrar: calculation.totalToCollect,
+        valorCuota: calculation.installmentValue,
+        saldoCuotaActual: calculation.installmentValue,
       };
       const pagosPrestamo = pagosMapped.filter((pago) => pago.prestamoId === prestamo.id);
       const paymentSnapshot = getLoanPaymentSnapshot({
@@ -1573,6 +1584,7 @@ export default function Home() {
           ...readLoanMetadata(),
           [createdLoanId]: {
             frecuenciaPago,
+            porcentajeInteres,
           },
         };
         saveLoanMetadata(nextMetadata);
@@ -2176,6 +2188,7 @@ export default function Home() {
         ...readLoanMetadata(),
         [loanEditForm.prestamoId]: {
           frecuenciaPago,
+          porcentajeInteres,
         },
       };
       saveLoanMetadata(nextMetadata);
