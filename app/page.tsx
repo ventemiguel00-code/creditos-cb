@@ -185,6 +185,20 @@ function buildLoanMetadataKey({
   return `draft:${clienteId}:${roundCurrency(montoCapital)}:${numeroCuotas}:${getMetadataDateKey(fechaInicio)}`;
 }
 
+function formatCompactCurrency(value: number) {
+  if (Math.abs(value) >= 1_000_000) {
+    const compact = Math.round((value / 1_000_000) * 10) / 10;
+    return `$${compact}M`;
+  }
+
+  if (Math.abs(value) >= 1_000) {
+    const compact = Math.round((value / 1_000) * 10) / 10;
+    return `$${compact}K`;
+  }
+
+  return formatCurrency(value);
+}
+
 function mapCliente(row: Record<string, unknown>): Cliente {
   return {
     id: String(row.id ?? ""),
@@ -2456,6 +2470,63 @@ export default function Home() {
   const gananciaTotalPersonal = roundCurrency((gananciaCobradaTotal * personalPorcentaje) / 100);
   const initialCapital = Math.max(Number(initialCapitalInput || 0), 0);
   const capitalDisponible = Math.max(initialCapital - capitalPrestado + totalRecaudado, 0);
+  const totalSaldoPendiente = roundCurrency(
+    prestamos.reduce((sum, prestamo) => sum + prestamo.saldoRestante, 0),
+  );
+  const totalObjetivoCartera = roundCurrency(
+    prestamos.reduce((sum, prestamo) => sum + prestamo.totalCobrar, 0),
+  );
+  const carteraCobradaPorcentaje =
+    totalObjetivoCartera > 0
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            roundCurrency(((totalObjetivoCartera - totalSaldoPendiente) / totalObjetivoCartera) * 100),
+          ),
+        )
+      : 0;
+  const carteraPendientePorcentaje =
+    totalObjetivoCartera > 0
+      ? Math.min(100, Math.max(0, roundCurrency((totalSaldoPendiente / totalObjetivoCartera) * 100)))
+      : 0;
+  const balanceChartData = [
+    {
+      label: "Capital",
+      value: initialCapital,
+      accent: "from-slate-900 via-slate-800 to-slate-700",
+      note: "Fondo base",
+    },
+    {
+      label: "Prestado",
+      value: capitalPrestado,
+      accent: "from-green-700 via-green-600 to-lime-500",
+      note: "Dinero colocado",
+    },
+    {
+      label: "Recaudado",
+      value: totalRecaudado,
+      accent: "from-sky-700 via-blue-600 to-cyan-500",
+      note: "Cobro recibido",
+    },
+    {
+      label: "Ganancia",
+      value: gananciaCobradaTotal,
+      accent: "from-amber-300 via-yellow-400 to-orange-500",
+      note: "Ganancia cobrada",
+    },
+    {
+      label: "Disponible",
+      value: capitalDisponible,
+      accent: "from-fuchsia-700 via-violet-600 to-purple-500",
+      note: "Listo para prestar",
+    },
+  ];
+  const balanceChartMax = Math.max(...balanceChartData.map((item) => item.value), 1);
+  const balanceChartTicks = [1, 0.75, 0.5, 0.25, 0].map((ratio) => ({
+    label: formatCompactCurrency(balanceChartMax * ratio),
+    ratio,
+  }));
   const normalizedClientSearch = deferredClientSearch.trim().toLowerCase();
   const loanStatusDetails = prestamos.map((prestamo) => {
     const overdueInfo = getLoanOverdueInfo({
@@ -2484,6 +2555,20 @@ export default function Home() {
     return item.overdueInfo.dueDate.getTime() === todayStart.getTime();
   });
   const totalEnMora = morosos.reduce((sum, item) => sum + item.prestamo.saldoRestante, 0);
+  const clientesAlDiaPorcentaje =
+    prestamos.length > 0
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            roundCurrency(((prestamos.length - morosos.length) / prestamos.length) * 100),
+          ),
+        )
+      : 0;
+  const clientesEnMoraPorcentaje =
+    prestamos.length > 0
+      ? Math.min(100, Math.max(0, roundCurrency((morosos.length / prestamos.length) * 100)))
+      : 0;
   const prestamosClienteObservacion = prestamos.filter((prestamo) =>
     observationForm.clienteId ? prestamo.clienteId === observationForm.clienteId : true,
   );
@@ -3443,6 +3528,130 @@ export default function Home() {
               </div>
             </article>
           </div>
+
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-green-700">
+                  Balance visual
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Lectura rapida de tu negocio
+                </h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                  Estos graficos se actualizan con tus clientes, prestamos y pagos reales para que
+                  tengas una lectura visual inmediata del estado de la cartera.
+                </p>
+              </div>
+              <div className="rounded-full bg-white px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-500 shadow-sm">
+                Base actual {formatCurrency(balanceChartMax)}
+              </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,250,245,0.92))] p-4 sm:p-5">
+                <div className="grid min-h-[320px] grid-cols-[60px_1fr] gap-4 sm:min-h-[360px]">
+                  <div className="relative">
+                    {balanceChartTicks.map((tick) => (
+                      <div
+                        key={tick.ratio}
+                        className="absolute left-0 right-0 flex -translate-y-1/2 items-center justify-end gap-2 text-[11px] font-semibold text-slate-500"
+                        style={{ top: `${(1 - tick.ratio) * 100}%` }}
+                      >
+                        <span>{tick.label}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="relative">
+                    {balanceChartTicks.map((tick) => (
+                      <div
+                        key={`line-${tick.ratio}`}
+                        className="absolute left-0 right-0 border-t border-dashed border-slate-200"
+                        style={{ top: `${(1 - tick.ratio) * 100}%` }}
+                      />
+                    ))}
+
+                    <div className="relative flex h-full items-end gap-3 overflow-x-auto pb-1 pt-6 sm:gap-4">
+                      {balanceChartData.map((item) => {
+                        const heightPercent = Math.max((item.value / balanceChartMax) * 100, item.value > 0 ? 6 : 0);
+
+                        return (
+                          <div key={item.label} className="flex min-w-[84px] flex-1 flex-col items-center gap-3">
+                            <div className="flex min-h-[32px] items-end text-center text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                              {formatCompactCurrency(item.value)}
+                            </div>
+                            <div className="relative flex h-[250px] w-full items-end rounded-[24px] bg-slate-100/80 p-2 sm:h-[280px]">
+                              <div
+                                className={`w-full rounded-[20px] bg-gradient-to-b ${item.accent} shadow-[0_20px_40px_rgba(15,23,42,0.18)] transition-all duration-500`}
+                                style={{ height: `${heightPercent}%` }}
+                              />
+                            </div>
+                            <div className="text-center">
+                              <p className="text-sm font-black text-slate-900">{item.label}</p>
+                              <p className="mt-1 text-xs text-slate-500">{item.note}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3">
+                {[
+                  {
+                    label: "Cartera cobrada",
+                    value: carteraCobradaPorcentaje,
+                    detail: `${formatCurrency(totalObjetivoCartera - totalSaldoPendiente)} de ${formatCurrency(totalObjetivoCartera)}`,
+                    bar: "from-emerald-500 to-green-600",
+                  },
+                  {
+                    label: "Saldo pendiente",
+                    value: carteraPendientePorcentaje,
+                    detail: `${formatCurrency(totalSaldoPendiente)} por recuperar`,
+                    bar: "from-amber-400 to-orange-500",
+                  },
+                  {
+                    label: "Clientes al dia",
+                    value: clientesAlDiaPorcentaje,
+                    detail: `${prestamos.length - morosos.length} de ${prestamos.length} prestamos sin mora`,
+                    bar: "from-sky-500 to-cyan-600",
+                  },
+                  {
+                    label: "Clientes en mora",
+                    value: clientesEnMoraPorcentaje,
+                    detail: `${morosos.length} de ${prestamos.length} prestamos con atraso`,
+                    bar: "from-rose-500 to-red-600",
+                  },
+                ].map((item) => (
+                  <article
+                    key={item.label}
+                    className="rounded-[24px] border border-white/60 bg-white/85 p-4 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                          {item.label}
+                        </p>
+                        <p className="mt-2 text-3xl font-black text-slate-900">{item.value}%</p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                        {item.detail}
+                      </span>
+                    </div>
+                    <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full bg-gradient-to-r ${item.bar}`}
+                        style={{ width: `${item.value}%` }}
+                      />
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </article>
 
           <div className="flex flex-col gap-4">
             <article className="glass-panel rounded-[30px] p-4 sm:p-5">
