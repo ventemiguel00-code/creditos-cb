@@ -2737,13 +2737,6 @@ export default function Home() {
             <p className="text-sm font-semibold uppercase tracking-[0.3em] text-lime-100/90">
               Creditos CB
             </p>
-            <h1 className="section-title mt-3 text-5xl font-black leading-[0.92]">
-              Tu vitrina digital para prestar con mas presencia y cobrar con orden.
-            </h1>
-            <p className="mt-5 max-w-2xl text-lg leading-8 text-white/88">
-              Muestra una imagen mas fuerte de tu negocio mientras administras clientes,
-              prestamos, pagos, recibos y saldo restante desde un panel claro y rapido.
-            </p>
             <div className="mt-6 overflow-hidden rounded-[30px] border border-white/30 bg-white/10 p-3 backdrop-blur">
               <div className="rounded-[24px] border border-white/15 bg-white/95 p-3 shadow-[0_24px_70px_rgba(7,61,93,0.2)]">
                 <Image
@@ -2798,23 +2791,6 @@ export default function Home() {
                   <p className="mt-2 text-base font-semibold text-white">{item.value}</p>
                 </div>
               ))}
-            </div>
-            <div className="mt-6 flex items-end justify-between gap-6 rounded-[28px] border border-white/12 bg-black/10 px-6 py-5">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.22em] text-white/70">
-                  Lo que resuelve la app
-                </p>
-                <p className="mt-2 max-w-xl text-base leading-7 text-white/88">
-                  Menos desorden al cobrar, mejor seguimiento por cliente y una presentacion
-                  mas fuerte cuando trabajas desde computador.
-                </p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className="text-xs font-black uppercase tracking-[0.22em] text-white/60">
-                  Marca visible
-                </p>
-                <p className="mt-2 text-3xl font-black text-white">CB</p>
-              </div>
             </div>
           </div>
 
