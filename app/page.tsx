@@ -23,6 +23,7 @@ import {
 type Cliente = {
   id: string;
   nombre: string;
+  cedula: string;
   direccion: string;
   telefono: string;
   correo: string;
@@ -89,6 +90,13 @@ type LoanMetadata = Record<
   }
 >;
 
+type ClientMetadata = Record<
+  string,
+  {
+    cedula?: string;
+  }
+>;
+
 type ObservationMetadata = {
   clientes: Record<string, string>;
   prestamos: Record<string, string>;
@@ -107,6 +115,7 @@ type ProfitPeriod = "diario" | "semanal" | "quincenal" | "mensual";
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
 const LAST_CLEANUP_RUN_KEY = "creditos-cb-last-cleanup-run";
 const LOAN_METADATA_KEY = "creditos-cb-loan-metadata";
+const CLIENT_METADATA_KEY = "creditos-cb-client-metadata";
 const OBSERVATION_METADATA_KEY = "creditos-cb-observations";
 const PAYMENT_METADATA_KEY = "creditos-cb-payment-metadata";
 const PROFIT_DISTRIBUTION_KEY = "creditos-cb-profit-distribution";
@@ -203,6 +212,13 @@ function mapCliente(row: Record<string, unknown>): Cliente {
   return {
     id: String(row.id ?? ""),
     nombre: String(row.nombre ?? ""),
+    cedula: String(
+      row.cedula ??
+        row.numero_documento ??
+        row.documento ??
+        row.cc ??
+        "",
+    ),
     direccion: String(row.direccion ?? ""),
     telefono: String(row.telefono ?? ""),
     correo: String(row.correo ?? row.email ?? ""),
@@ -298,6 +314,36 @@ function saveLoanMetadata(metadata: LoanMetadata) {
   }
 
   window.localStorage.setItem(LOAN_METADATA_KEY, JSON.stringify(metadata));
+}
+
+function normalizeCedula(value: unknown) {
+  return String(value ?? "").replace(/\D+/g, "").trim();
+}
+
+function readClientMetadata(): ClientMetadata {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CLIENT_METADATA_KEY);
+
+    if (!raw) {
+      return {};
+    }
+
+    return JSON.parse(raw) as ClientMetadata;
+  } catch {
+    return {};
+  }
+}
+
+function saveClientMetadata(metadata: ClientMetadata) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(CLIENT_METADATA_KEY, JSON.stringify(metadata));
 }
 
 function readObservationMetadata(): ObservationMetadata {
@@ -423,7 +469,7 @@ function mapPrestamo(row: Record<string, unknown>): Prestamo {
   const porcentajeInteres = Number(
     row.porcentaje_interes ??
       row.interes_porcentaje ??
-      (montoCapital > 0 ? ((totalCobrar - montoCapital) / montoCapital) * 100 : 20),
+      (montoCapital > 0 ? ((totalCobrar - montoCapital) / montoCapital) * 100 : 0),
   );
 
   return {
@@ -917,6 +963,21 @@ async function findRecentLoanId({
   return "";
 }
 
+function isValidLoanCalculation(calculation: ReturnType<typeof calculateLoanValues>) {
+  return (
+    Number.isFinite(calculation.capital) &&
+    Number.isFinite(calculation.installmentCount) &&
+    Number.isFinite(calculation.interestRatePercent) &&
+    Number.isFinite(calculation.totalToCollect) &&
+    Number.isFinite(calculation.installmentValue) &&
+    calculation.capital > 0 &&
+    calculation.installmentCount > 0 &&
+    calculation.interestRatePercent >= 0 &&
+    calculation.totalToCollect >= calculation.capital &&
+    calculation.installmentValue > 0
+  );
+}
+
 async function loadInitialCapitalValue() {
   const localFallback =
     typeof window === "undefined"
@@ -991,9 +1052,11 @@ export default function Home() {
     newPassword: "",
     confirmPassword: "",
   });
+  const [clientEditId, setClientEditId] = useState("");
   const [clientSearch, setClientSearch] = useState("");
   const [clientForm, setClientForm] = useState({
     nombre: "",
+    cedula: "",
     direccion: "",
     telefono: "",
     correo: "",
@@ -1226,8 +1289,11 @@ export default function Home() {
   async function loadData() {
     setScreenMessage("");
     const storedLoanMetadata = readLoanMetadata();
+    const storedClientMetadata = readClientMetadata();
     const nextStoredLoanMetadata = { ...storedLoanMetadata };
+    const nextStoredClientMetadata = { ...storedClientMetadata };
     let shouldPersistLoanMetadata = false;
+    let shouldPersistClientMetadata = false;
 
     const [clientesResponse, prestamosResponse, pagosResponse, initialCapitalResponse] = await Promise.all([
       selectTableData("clientes"),
@@ -1325,7 +1391,27 @@ export default function Home() {
       })
       .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 
-    setClientes((clientesResponse.data ?? []).map((row) => mapCliente(row)));
+    const clientesMapped = (clientesResponse.data ?? []).map((row) => {
+      const clienteBase = mapCliente(row);
+      const cedula = normalizeCedula(
+        clienteBase.cedula || storedClientMetadata[clienteBase.id]?.cedula,
+      );
+
+      if (cedula && nextStoredClientMetadata[clienteBase.id]?.cedula !== cedula) {
+        nextStoredClientMetadata[clienteBase.id] = {
+          ...(nextStoredClientMetadata[clienteBase.id] ?? {}),
+          cedula,
+        };
+        shouldPersistClientMetadata = true;
+      }
+
+      return {
+        ...clienteBase,
+        cedula,
+      };
+    });
+
+    setClientes(clientesMapped);
     setPrestamos(prestamosMapped);
     setPagos(pagosEnriched);
     if (shouldPersistLoanMetadata) {
@@ -1333,6 +1419,9 @@ export default function Home() {
       setLoanMetadata(nextStoredLoanMetadata);
     } else {
       setLoanMetadata(storedLoanMetadata);
+    }
+    if (shouldPersistClientMetadata) {
+      saveClientMetadata(nextStoredClientMetadata);
     }
     setInitialCapitalInput(String(initialCapitalResponse.value));
     setCapitalStorageMode(initialCapitalResponse.source);
@@ -1541,12 +1630,73 @@ export default function Home() {
     reader.readAsDataURL(file);
   }
 
+  function findDuplicateCedula(cedula: string, excludeClientId = "") {
+    return clientes.find(
+      (cliente) =>
+        normalizeCedula(cliente.cedula) === cedula &&
+        cliente.id !== excludeClientId,
+    );
+  }
+
+  function resetClientForm() {
+    setClientEditId("");
+    setClientForm({
+      nombre: "",
+      cedula: "",
+      direccion: "",
+      telefono: "",
+      correo: "",
+      fechaIngreso: getTodayInputDate(),
+    });
+    setPhotoPreview("");
+  }
+
+  function handleStartClientEdit(cliente: Cliente) {
+    setClientEditId(cliente.id);
+    setClientForm({
+      nombre: cliente.nombre,
+      cedula: cliente.cedula,
+      direccion: cliente.direccion,
+      telefono: cliente.telefono,
+      correo: cliente.correo,
+      fechaIngreso: cliente.createdAt ? cliente.createdAt.slice(0, 10) : getTodayInputDate(),
+    });
+    setPhotoPreview(cliente.fotoUrl || "");
+    setActiveTab("clientes");
+    setScreenMessage(`Editando cliente ${cliente.nombre}.`);
+
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
+  }
+
   async function handleCreateClient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setScreenMessage("");
 
     try {
+      const cedula = normalizeCedula(clientForm.cedula);
+
+      if (!cedula) {
+        throw new Error("La cedula del cliente es obligatoria.");
+      }
+
+      const duplicateClient = findDuplicateCedula(cedula, clientEditId);
+
+      if (duplicateClient) {
+        throw new Error(`La cedula ${cedula} ya esta registrada en ${duplicateClient.nombre}.`);
+      }
+
       const basePayload = {
+        nombre: clientForm.nombre.trim(),
+        cedula,
+        direccion: clientForm.direccion.trim(),
+        telefono: clientForm.telefono.trim(),
+        fecha_registro: createIsoDateFromInput(clientForm.fechaIngreso),
+      };
+      const basePayloadWithoutCedula = {
         nombre: clientForm.nombre.trim(),
         direccion: clientForm.direccion.trim(),
         telefono: clientForm.telefono.trim(),
@@ -1562,6 +1712,13 @@ export default function Home() {
         { ...basePayload, correo },
         { ...basePayload, email: correo },
         basePayload,
+        { ...basePayloadWithoutCedula, correo, foto_url: foto },
+        { ...basePayloadWithoutCedula, email: correo, foto_url: foto },
+        { ...basePayloadWithoutCedula, correo, foto },
+        { ...basePayloadWithoutCedula, email: correo, foto },
+        { ...basePayloadWithoutCedula, correo },
+        { ...basePayloadWithoutCedula, email: correo },
+        basePayloadWithoutCedula,
       ].map((payload) =>
         Object.fromEntries(
           Object.entries(payload).filter(([, value]) => value !== ""),
@@ -1569,19 +1726,23 @@ export default function Home() {
       );
 
       let lastError: Error | null = null;
+      let savedClientId = clientEditId;
 
       for (const payload of payloads) {
-        const { error } = await supabase.from("clientes").insert(payload);
+        const response = clientEditId
+          ? await supabase.from("clientes").update(payload).eq("id", clientEditId).select("*").single()
+          : await supabase.from("clientes").insert(payload).select("*").single();
 
-        if (!error) {
+        if (!response.error) {
+          savedClientId = String(response.data?.id ?? savedClientId ?? "");
           lastError = null;
           break;
         }
 
-        lastError = error;
+        lastError = response.error;
 
-        if (!isSchemaColumnError(error.message)) {
-          throw error;
+        if (!isSchemaColumnError(response.error.message)) {
+          throw response.error;
         }
       }
 
@@ -1589,17 +1750,19 @@ export default function Home() {
         throw lastError;
       }
 
-      setClientForm({
-        nombre: "",
-        direccion: "",
-        telefono: "",
-        correo: "",
-        fechaIngreso: getTodayInputDate(),
-      });
-      setPhotoPreview("");
+      const nextClientMetadata = {
+        ...readClientMetadata(),
+        [savedClientId]: {
+          cedula,
+        },
+      };
+      saveClientMetadata(nextClientMetadata);
+      resetClientForm();
       await loadData();
       setActiveTab("clientes");
-      setScreenMessage("Cliente registrado correctamente.");
+      setScreenMessage(
+        clientEditId ? "Cliente actualizado correctamente." : "Cliente registrado correctamente.",
+      );
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
     }
@@ -1615,13 +1778,25 @@ export default function Home() {
       const porcentajeInteres = normalizeIntegerPercentage(loanForm.porcentajeInteres);
       const frecuenciaPago = normalizePaymentFrequency(loanForm.frecuenciaPago);
 
-      if (!loanForm.clienteId || capital <= 0 || numeroCuotas <= 0 || porcentajeInteres < 0) {
+      if (
+        !loanForm.clienteId ||
+        !Number.isFinite(capital) ||
+        !Number.isFinite(numeroCuotas) ||
+        capital <= 0 ||
+        numeroCuotas <= 0 ||
+        porcentajeInteres < 0
+      ) {
         throw new Error(
           "Debes seleccionar un cliente y completar capital, cuotas y porcentaje valido.",
         );
       }
 
       const calculation = calculateLoanValues(capital, numeroCuotas, porcentajeInteres);
+
+      if (!isValidLoanCalculation(calculation)) {
+        throw new Error("Los calculos del prestamo no son validos. Revisa capital, cuotas e interes.");
+      }
+
       const cuotasPagadasIniciales = Math.min(
         Math.max(Math.round(Number(loanForm.cuotasPagadasIniciales || 0)), 0),
         numeroCuotas,
@@ -1637,6 +1812,14 @@ export default function Home() {
         cliente_id: loanForm.clienteId,
         monto_prestado: calculation.capital,
         numero_cuotas: calculation.installmentCount,
+        porcentaje_interes: calculation.interestRatePercent,
+        fecha_inicio: createIsoDateFromInput(loanForm.fechaInicio),
+        estado: cuotasPagadasIniciales >= numeroCuotas ? "pagado" : "activo",
+      };
+      const payloadWithoutPercentage = {
+        cliente_id: loanForm.clienteId,
+        monto_prestado: calculation.capital,
+        numero_cuotas: calculation.installmentCount,
         fecha_inicio: createIsoDateFromInput(loanForm.fechaInicio),
         estado: cuotasPagadasIniciales >= numeroCuotas ? "pagado" : "activo",
       };
@@ -1646,6 +1829,10 @@ export default function Home() {
         { ...payload, frecuencia: frecuenciaPago },
         { ...payload, modalidad_pago: frecuenciaPago },
         payload,
+        { ...payloadWithoutPercentage, frecuencia_pago: frecuenciaPago },
+        { ...payloadWithoutPercentage, frecuencia: frecuenciaPago },
+        { ...payloadWithoutPercentage, modalidad_pago: frecuenciaPago },
+        payloadWithoutPercentage,
       ];
       const pendingMetadataKey = buildLoanMetadataKey({
         clienteId: loanForm.clienteId,
@@ -2190,6 +2377,14 @@ export default function Home() {
         throw error;
       }
 
+      const nextClientMetadata = { ...readClientMetadata() };
+      delete nextClientMetadata[cliente.id];
+      saveClientMetadata(nextClientMetadata);
+
+      if (clientEditId === cliente.id) {
+        resetClientForm();
+      }
+
       await loadData();
       setScreenMessage(`Cliente ${cliente.nombre} eliminado correctamente.`);
     } catch (error) {
@@ -2242,6 +2437,8 @@ export default function Home() {
 
       if (
         !loanEditForm.clienteId ||
+        !Number.isFinite(montoPrestado) ||
+        !Number.isFinite(numeroCuotas) ||
         montoPrestado <= 0 ||
         numeroCuotas <= 0 ||
         porcentajeInteres < 0
@@ -2250,6 +2447,11 @@ export default function Home() {
       }
 
       const calculation = calculateLoanValues(montoPrestado, numeroCuotas, porcentajeInteres);
+
+      if (!isValidLoanCalculation(calculation)) {
+        throw new Error("Los calculos del prestamo no son validos. Revisa capital, cuotas e interes.");
+      }
+
       const cuotasPagadasIniciales = Math.min(
         Math.max(Math.round(Number(loanEditForm.cuotasPagadasIniciales || 0)), 0),
         numeroCuotas,
@@ -2265,6 +2467,17 @@ export default function Home() {
         cliente_id: loanEditForm.clienteId,
         monto_prestado: calculation.capital,
         numero_cuotas: calculation.installmentCount,
+        porcentaje_interes: calculation.interestRatePercent,
+        fecha_inicio: createIsoDateFromInput(loanEditForm.fechaInicio),
+        estado:
+          cuotasPagadasIniciales >= numeroCuotas && abonoCuotaActualInicial <= 0
+            ? "pagado"
+            : loanEditForm.estado || "activo",
+      };
+      const payloadWithoutPercentage = {
+        cliente_id: loanEditForm.clienteId,
+        monto_prestado: calculation.capital,
+        numero_cuotas: calculation.installmentCount,
         fecha_inicio: createIsoDateFromInput(loanEditForm.fechaInicio),
         estado:
           cuotasPagadasIniciales >= numeroCuotas && abonoCuotaActualInicial <= 0
@@ -2277,6 +2490,10 @@ export default function Home() {
         { ...payload, frecuencia: frecuenciaPago },
         { ...payload, modalidad_pago: frecuenciaPago },
         payload,
+        { ...payloadWithoutPercentage, frecuencia_pago: frecuenciaPago },
+        { ...payloadWithoutPercentage, frecuencia: frecuenciaPago },
+        { ...payloadWithoutPercentage, modalidad_pago: frecuenciaPago },
+        payloadWithoutPercentage,
       ];
 
       let lastError: Error | null = null;
@@ -2606,7 +2823,7 @@ export default function Home() {
       return true;
     }
 
-    return [cliente.nombre, cliente.telefono, cliente.correo, cliente.direccion]
+    return [cliente.nombre, cliente.cedula, cliente.telefono, cliente.correo, cliente.direccion]
       .join(" ")
       .toLowerCase()
       .includes(normalizedClientSearch);
@@ -4225,6 +4442,25 @@ export default function Home() {
                   </label>
 
                   <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Cedula</span>
+                    <input
+                      value={clientForm.cedula}
+                      onChange={(event) =>
+                        setClientForm((current) => ({
+                          ...current,
+                          cedula: normalizeCedula(event.target.value),
+                        }))
+                      }
+                      required
+                      inputMode="numeric"
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="1020304050"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-2">
                     <span className="text-sm font-semibold text-slate-700">Telefono</span>
                     <input
                       value={clientForm.telefono}
@@ -4318,8 +4554,18 @@ export default function Home() {
                   type="submit"
                   className="brand-button mt-1 h-13 rounded-2xl px-5 text-sm font-bold transition"
                 >
-                  Guardar cliente
+                  {clientEditId ? "Actualizar cliente" : "Guardar cliente"}
                 </button>
+
+                {clientEditId ? (
+                  <button
+                    type="button"
+                    onClick={resetClientForm}
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Cancelar edicion
+                  </button>
+                ) : null}
 
                 <div className="rounded-[22px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
                   Si el cliente viene de tu sistema anterior, aqui puedes cargar su fecha real de
@@ -4350,7 +4596,7 @@ export default function Home() {
                 <input
                   value={clientSearch}
                   onChange={(event) => setClientSearch(event.target.value)}
-                  placeholder="Buscar cliente, telefono, correo o direccion"
+                  placeholder="Buscar cliente, cedula, telefono, correo o direccion"
                   className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-green-500"
                 />
               </div>
@@ -4393,6 +4639,9 @@ export default function Home() {
                         <h3 className="truncate text-lg font-black text-slate-900">
                           {cliente.nombre}
                         </h3>
+                        <p className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                          Cedula {cliente.cedula || "--"}
+                        </p>
                         <p className="truncate text-sm text-slate-600">{cliente.telefono}</p>
                         <p className="truncate text-xs text-slate-500">{cliente.correo || "--"}</p>
                         <p className="mt-1 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
@@ -4408,13 +4657,22 @@ export default function Home() {
                         <strong className="text-slate-900">Creado:</strong> {formatDate(cliente.createdAt)}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteClient(cliente)}
-                      className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
-                    >
-                      Borrar cliente
-                    </button>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleStartClientEdit(cliente)}
+                        className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-bold text-sky-700 transition hover:bg-sky-100"
+                      >
+                        Editar cliente
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteClient(cliente)}
+                        className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-100"
+                      >
+                        Borrar cliente
+                      </button>
+                    </div>
                         </>
                       );
                     })()}
@@ -4427,6 +4685,7 @@ export default function Home() {
                   <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
                     <tr>
                       <th className="px-4 py-3">Cliente</th>
+                      <th className="px-4 py-3">Cedula</th>
                       <th className="px-4 py-3">Telefono</th>
                       <th className="px-4 py-3">Correo</th>
                       <th className="px-4 py-3">Direccion</th>
@@ -4442,6 +4701,7 @@ export default function Home() {
                       return (
                         <tr key={cliente.id} className="border-t border-slate-100 text-sm">
                           <td className="px-4 py-3 font-semibold text-slate-800">{cliente.nombre}</td>
+                          <td className="px-4 py-3">{cliente.cedula || "--"}</td>
                           <td className="px-4 py-3">{cliente.telefono}</td>
                           <td className="px-4 py-3">{cliente.correo || "--"}</td>
                           <td className="px-4 py-3">{cliente.direccion}</td>
@@ -4452,13 +4712,22 @@ export default function Home() {
                           </td>
                           <td className="px-4 py-3">{formatDate(cliente.createdAt)}</td>
                           <td className="px-4 py-3">
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteClient(cliente)}
-                              className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
-                            >
-                              Borrar
-                            </button>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleStartClientEdit(cliente)}
+                                className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteClient(cliente)}
+                                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100"
+                              >
+                                Borrar
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );

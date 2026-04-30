@@ -1,9 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
-import { getLoanOverdueInfo, type LoanFrequency } from "@/lib/loan-utils";
+import {
+  calculateLoanValues,
+  getLoanOverdueInfo,
+  roundCurrency,
+  type LoanFrequency,
+} from "@/lib/loan-utils";
 
 type ClienteRow = {
   id: string;
   nombre: string;
+  cedula?: string | null;
   direccion: string;
   telefono: string;
   correo: string | null;
@@ -15,6 +21,7 @@ type PrestamoRow = {
   id: string;
   cliente_id: string;
   monto_prestado: number;
+  porcentaje_interes?: number | null;
   total_a_pagar: number;
   numero_cuotas: number;
   valor_cuota: number;
@@ -96,18 +103,28 @@ export async function fetchDashboardData() {
   const clientes = (clientesResponse.data ?? []) as ClienteRow[];
   const pagos = (pagosResponse.data ?? []) as PagoRow[];
   const prestamos = ((prestamosResponse.data ?? []) as PrestamoRow[]).map((prestamo) => {
+    const montoPrestado = Number(prestamo.monto_prestado ?? 0);
+    const numeroCuotas = Math.max(Number(prestamo.numero_cuotas ?? 0), 1);
+    const porcentajeInteres =
+      Number(prestamo.porcentaje_interes) >= 0
+        ? Number(prestamo.porcentaje_interes ?? 0)
+        : montoPrestado > 0
+          ? ((Number(prestamo.total_a_pagar) - montoPrestado) /
+              montoPrestado) *
+            100
+          : 0;
+    const calculation = calculateLoanValues(
+      montoPrestado,
+      numeroCuotas,
+      Math.max(roundCurrency(porcentajeInteres), 0),
+    );
     const pagosPrestamo = pagos.filter((pago) => pago.prestamo_id === prestamo.id);
     const totalPagado = pagosPrestamo.reduce((sum, pago) => sum + Number(pago.monto_pagado ?? 0), 0);
-    const saldoRestante = Math.max(Number(prestamo.total_a_pagar ?? 0) - totalPagado, 0);
+    const totalPactado = calculation.totalToCollect;
+    const saldoRestante = Math.max(totalPactado - totalPagado, 0);
     const frecuenciaPago = normalizeServerPaymentFrequency(
       prestamo.frecuencia_pago ?? prestamo.frecuencia ?? prestamo.modalidad_pago,
     );
-    const porcentajeInteres =
-      Number(prestamo.monto_prestado) > 0
-        ? ((Number(prestamo.total_a_pagar) - Number(prestamo.monto_prestado)) /
-            Number(prestamo.monto_prestado)) *
-          100
-        : 0;
     const overdueInfo = getLoanOverdueInfo({
       createdAt: prestamo.fecha_inicio,
       frecuenciaPago,
@@ -117,6 +134,8 @@ export async function fetchDashboardData() {
 
     return {
       ...prestamo,
+      total_a_pagar: totalPactado,
+      valor_cuota: calculation.installmentValue,
       pagos_realizados: pagosPrestamo.length,
       saldo_restante: saldoRestante,
       porcentaje_interes: Math.round((porcentajeInteres + Number.EPSILON) * 100) / 100,

@@ -33,6 +33,7 @@ export async function GET() {
   ];
   const clientesSheet = clientes.map((cliente) => ({
     Nombre: cliente.nombre,
+    Cedula: cliente.cedula ?? "",
     Direccion: cliente.direccion,
     Telefono: cliente.telefono,
     Correo: cliente.correo ?? "",
