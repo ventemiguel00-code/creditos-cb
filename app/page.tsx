@@ -77,6 +77,8 @@ type LoanEditForm = {
   fechaInicio: string;
   cuotasPagadasIniciales: string;
   abonoCuotaActualInicial: string;
+  totalPagadoInicial: string;
+  saldoPendienteInicial: string;
   estado: string;
 };
 
@@ -107,6 +109,7 @@ type PaymentMetadata = Record<
   {
     aplicadoPrestamo: number;
     moraPagada: number;
+    origen?: "manual" | "base_importado";
   }
 >;
 
@@ -978,6 +981,152 @@ function isValidLoanCalculation(calculation: ReturnType<typeof calculateLoanValu
   );
 }
 
+function formatFormMoney(value: number) {
+  return Number.isFinite(value) ? String(roundCurrency(value)) : "0";
+}
+
+function deriveLoanProgressFromInstallments({
+  montoCapital,
+  numeroCuotas,
+  porcentajeInteres,
+  cuotasPagadasIniciales,
+  abonoCuotaActualInicial,
+}: {
+  montoCapital: string;
+  numeroCuotas: string;
+  porcentajeInteres: string;
+  cuotasPagadasIniciales: string;
+  abonoCuotaActualInicial: string;
+}) {
+  const capital = Math.max(Number(montoCapital || 0), 0);
+  const cuotas = Math.max(Math.round(Number(numeroCuotas || 0)), 0);
+  const porcentaje = normalizeIntegerPercentage(porcentajeInteres);
+
+  if (capital <= 0 || cuotas <= 0) {
+    return {
+      cuotasPagadasIniciales: String(Math.max(Math.round(Number(cuotasPagadasIniciales || 0)), 0)),
+      abonoCuotaActualInicial: formatFormMoney(Math.max(Number(abonoCuotaActualInicial || 0), 0)),
+      totalPagadoInicial: "0",
+      saldoPendienteInicial: "0",
+      estado: "activo",
+    };
+  }
+
+  const calculation = calculateLoanValues(capital, cuotas, porcentaje);
+  const cuotasPagadas = Math.min(
+    Math.max(Math.round(Number(cuotasPagadasIniciales || 0)), 0),
+    cuotas,
+  );
+  const abonoActual =
+    cuotasPagadas >= cuotas
+      ? 0
+      : Math.min(
+          Math.max(Number(abonoCuotaActualInicial || 0), 0),
+          calculation.installmentValue,
+        );
+  const totalPagado = roundCurrency(
+    Math.min(cuotasPagadas * calculation.installmentValue + abonoActual, calculation.totalToCollect),
+  );
+  const saldoPendiente = roundCurrency(Math.max(calculation.totalToCollect - totalPagado, 0));
+
+  return {
+    cuotasPagadasIniciales: String(cuotasPagadas),
+    abonoCuotaActualInicial: formatFormMoney(abonoActual),
+    totalPagadoInicial: formatFormMoney(totalPagado),
+    saldoPendienteInicial: formatFormMoney(saldoPendiente),
+    estado: saldoPendiente <= 0 || cuotasPagadas >= cuotas ? "pagado" : "activo",
+  };
+}
+
+function deriveLoanProgressFromTotalPaid({
+  montoCapital,
+  numeroCuotas,
+  porcentajeInteres,
+  totalPagadoInicial,
+}: {
+  montoCapital: string;
+  numeroCuotas: string;
+  porcentajeInteres: string;
+  totalPagadoInicial: string;
+}) {
+  const capital = Math.max(Number(montoCapital || 0), 0);
+  const cuotas = Math.max(Math.round(Number(numeroCuotas || 0)), 0);
+  const porcentaje = normalizeIntegerPercentage(porcentajeInteres);
+
+  if (capital <= 0 || cuotas <= 0) {
+    return {
+      cuotasPagadasIniciales: "0",
+      abonoCuotaActualInicial: "0",
+      totalPagadoInicial: formatFormMoney(Math.max(Number(totalPagadoInicial || 0), 0)),
+      saldoPendienteInicial: "0",
+      estado: "activo",
+    };
+  }
+
+  const calculation = calculateLoanValues(capital, cuotas, porcentaje);
+  const totalPagado = roundCurrency(
+    Math.min(Math.max(Number(totalPagadoInicial || 0), 0), calculation.totalToCollect),
+  );
+  const cuotasCompletas = Math.min(
+    Math.floor((totalPagado + 0.0001) / Math.max(calculation.installmentValue, 1)),
+    cuotas,
+  );
+  const abonoActual =
+    cuotasCompletas >= cuotas
+      ? 0
+      : roundCurrency(
+          Math.max(totalPagado - cuotasCompletas * calculation.installmentValue, 0),
+        );
+  const saldoPendiente = roundCurrency(Math.max(calculation.totalToCollect - totalPagado, 0));
+
+  return {
+    cuotasPagadasIniciales: String(cuotasCompletas),
+    abonoCuotaActualInicial: formatFormMoney(abonoActual),
+    totalPagadoInicial: formatFormMoney(totalPagado),
+    saldoPendienteInicial: formatFormMoney(saldoPendiente),
+    estado: saldoPendiente <= 0 || cuotasCompletas >= cuotas ? "pagado" : "activo",
+  };
+}
+
+function deriveLoanProgressFromPendingBalance({
+  montoCapital,
+  numeroCuotas,
+  porcentajeInteres,
+  saldoPendienteInicial,
+}: {
+  montoCapital: string;
+  numeroCuotas: string;
+  porcentajeInteres: string;
+  saldoPendienteInicial: string;
+}) {
+  const capital = Math.max(Number(montoCapital || 0), 0);
+  const cuotas = Math.max(Math.round(Number(numeroCuotas || 0)), 0);
+  const porcentaje = normalizeIntegerPercentage(porcentajeInteres);
+
+  if (capital <= 0 || cuotas <= 0) {
+    return {
+      cuotasPagadasIniciales: "0",
+      abonoCuotaActualInicial: "0",
+      totalPagadoInicial: "0",
+      saldoPendienteInicial: formatFormMoney(Math.max(Number(saldoPendienteInicial || 0), 0)),
+      estado: "activo",
+    };
+  }
+
+  const calculation = calculateLoanValues(capital, cuotas, porcentaje);
+  const saldoPendiente = roundCurrency(
+    Math.min(Math.max(Number(saldoPendienteInicial || 0), 0), calculation.totalToCollect),
+  );
+  const totalPagado = roundCurrency(Math.max(calculation.totalToCollect - saldoPendiente, 0));
+
+  return deriveLoanProgressFromTotalPaid({
+    montoCapital,
+    numeroCuotas,
+    porcentajeInteres,
+    totalPagadoInicial: String(totalPagado),
+  });
+}
+
 async function loadInitialCapitalValue() {
   const localFallback =
     typeof window === "undefined"
@@ -1071,6 +1220,9 @@ export default function Home() {
     fechaInicio: getTodayInputDate(),
     cuotasPagadasIniciales: "0",
     abonoCuotaActualInicial: "0",
+    totalPagadoInicial: "0",
+    saldoPendienteInicial: "0",
+    estado: "activo",
   });
   const [loanMetadata, setLoanMetadata] = useState<LoanMetadata>({});
   const [observationMetadata, setObservationMetadata] = useState<ObservationMetadata>({
@@ -1651,6 +1803,113 @@ export default function Home() {
     setPhotoPreview("");
   }
 
+  function updateLoanFormFromInstallments(
+    nextForm: typeof loanForm,
+    nextStateOverride?: Partial<typeof loanForm>,
+  ) {
+    const synced = deriveLoanProgressFromInstallments(nextForm);
+    setLoanForm({
+      ...nextForm,
+      ...synced,
+      ...(nextStateOverride ?? {}),
+    });
+  }
+
+  function updateLoanFormFromTotalPaid(nextForm: typeof loanForm) {
+    const synced = deriveLoanProgressFromTotalPaid(nextForm);
+    setLoanForm({
+      ...nextForm,
+      ...synced,
+    });
+  }
+
+  function updateLoanFormFromPendingBalance(nextForm: typeof loanForm) {
+    const synced = deriveLoanProgressFromPendingBalance(nextForm);
+    setLoanForm({
+      ...nextForm,
+      ...synced,
+    });
+  }
+
+  function updateLoanEditFormFromInstallments(nextForm: LoanEditForm, nextStateOverride?: Partial<LoanEditForm>) {
+    const synced = deriveLoanProgressFromInstallments(nextForm);
+    setLoanEditForm({
+      ...nextForm,
+      ...synced,
+      ...(nextStateOverride ?? {}),
+    });
+  }
+
+  function updateLoanEditFormFromTotalPaid(nextForm: LoanEditForm) {
+    const synced = deriveLoanProgressFromTotalPaid(nextForm);
+    setLoanEditForm({
+      ...nextForm,
+      ...synced,
+    });
+  }
+
+  function updateLoanEditFormFromPendingBalance(nextForm: LoanEditForm) {
+    const synced = deriveLoanProgressFromPendingBalance(nextForm);
+    setLoanEditForm({
+      ...nextForm,
+      ...synced,
+    });
+  }
+
+  function getImportedPaymentIds(prestamoId: string) {
+    const paymentMetadata = readPaymentMetadata();
+
+    return pagos
+      .filter((pago) => pago.prestamoId === prestamoId)
+      .filter((pago) => paymentMetadata[pago.id]?.origen === "base_importado")
+      .map((pago) => pago.id);
+  }
+
+  function getLoanHistoricalProgress(prestamo: Prestamo) {
+    const paymentMetadata = readPaymentMetadata();
+    const pagosPrestamo = pagos
+      .filter((pago) => pago.prestamoId === prestamo.id)
+      .sort((left, right) => {
+        if (left.cuotaNumero !== right.cuotaNumero) {
+          return left.cuotaNumero - right.cuotaNumero;
+        }
+
+        return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      });
+    const pagosBase = pagosPrestamo.filter(
+      (pago) => paymentMetadata[pago.id]?.origen === "base_importado",
+    );
+    const pagosReferencia = pagosBase.length > 0 ? pagosBase : pagosPrestamo;
+    const snapshot = getLoanPaymentSnapshot({
+      createdAt: prestamo.createdAt,
+      frecuenciaPago: prestamo.frecuenciaPago,
+      numeroCuotas: prestamo.numeroCuotas,
+      valorCuota: prestamo.valorCuota,
+      totalCobrar: prestamo.totalCobrar,
+      moraDiariaPorcentaje: Number(readDailyLateRate() || 0),
+      pagos: pagosReferencia.map((pago) => ({
+        ...pago,
+        aplicadoPrestamo: paymentMetadata[pago.id]?.aplicadoPrestamo,
+        moraPagada: paymentMetadata[pago.id]?.moraPagada,
+      })),
+    });
+    const totalPagado = snapshot.totalAplicadoPrestamo;
+
+    return {
+      cuotasPagadas: snapshot.cuotasPagadas,
+      abonoActual:
+        snapshot.cuotasPagadas >= prestamo.numeroCuotas
+          ? 0
+          : roundCurrency(Math.max(snapshot.totalAplicadoPrestamo - snapshot.cuotasPagadas * prestamo.valorCuota, 0)),
+      totalPagado,
+      saldoPendiente: roundCurrency(Math.max(prestamo.totalCobrar - totalPagado, 0)),
+      usaPagosBase: pagosBase.length > 0,
+      tienePagosReales: pagosPrestamo.some(
+        (pago) => paymentMetadata[pago.id]?.origen !== "base_importado",
+      ),
+    };
+  }
+
   function handleStartClientEdit(cliente: Cliente) {
     setClientEditId(cliente.id);
     setClientForm({
@@ -1797,31 +2056,49 @@ export default function Home() {
         throw new Error("Los calculos del prestamo no son validos. Revisa capital, cuotas e interes.");
       }
 
+      const progress = deriveLoanProgressFromTotalPaid(loanForm);
       const cuotasPagadasIniciales = Math.min(
-        Math.max(Math.round(Number(loanForm.cuotasPagadasIniciales || 0)), 0),
+        Math.max(Math.round(Number(progress.cuotasPagadasIniciales || 0)), 0),
         numeroCuotas,
       );
-      const abonoCuotaActualInicial =
-        cuotasPagadasIniciales >= numeroCuotas
-          ? 0
-          : Math.min(
-              Math.max(Number(loanForm.abonoCuotaActualInicial || 0), 0),
-              calculation.installmentValue,
-            );
+      const abonoCuotaActualInicial = roundCurrency(
+        Math.max(Number(progress.abonoCuotaActualInicial || 0), 0),
+      );
+      const totalPagadoInicial = roundCurrency(Math.max(Number(progress.totalPagadoInicial || 0), 0));
+      const saldoPendienteInicial = roundCurrency(
+        Math.max(Number(progress.saldoPendienteInicial || 0), 0),
+      );
+
+      if (cuotasPagadasIniciales > numeroCuotas) {
+        throw new Error("Las cuotas pagadas no pueden ser mayores al total de cuotas.");
+      }
+
+      if (saldoPendienteInicial < 0 || totalPagadoInicial < 0) {
+        throw new Error("El saldo pendiente y el total pagado no pueden ser negativos.");
+      }
+
+      if (loanForm.estado === "pagado" && saldoPendienteInicial > 0) {
+        throw new Error("No puedes marcar como pagado un prestamo que aun tiene saldo pendiente.");
+      }
+
+      if (saldoPendienteInicial <= 0 && cuotasPagadasIniciales < numeroCuotas) {
+        throw new Error("Si el saldo ya es cero, las cuotas pagadas deben cubrir el total del prestamo.");
+      }
+
       const payload = {
         cliente_id: loanForm.clienteId,
         monto_prestado: calculation.capital,
         numero_cuotas: calculation.installmentCount,
         porcentaje_interes: calculation.interestRatePercent,
         fecha_inicio: createIsoDateFromInput(loanForm.fechaInicio),
-        estado: cuotasPagadasIniciales >= numeroCuotas ? "pagado" : "activo",
+        estado: saldoPendienteInicial <= 0 ? "pagado" : loanForm.estado || "activo",
       };
       const payloadWithoutPercentage = {
         cliente_id: loanForm.clienteId,
         monto_prestado: calculation.capital,
         numero_cuotas: calculation.installmentCount,
         fecha_inicio: createIsoDateFromInput(loanForm.fechaInicio),
-        estado: cuotasPagadasIniciales >= numeroCuotas ? "pagado" : "activo",
+        estado: saldoPendienteInicial <= 0 ? "pagado" : loanForm.estado || "activo",
       };
 
       const payloads = [
@@ -1929,6 +2206,7 @@ export default function Home() {
                 ? abonoCuotaActualInicial
                 : calculation.installmentValue,
               moraPagada: 0,
+              origen: "base_importado" as const,
             };
           });
 
@@ -1945,12 +2223,15 @@ export default function Home() {
         fechaInicio: getTodayInputDate(),
         cuotasPagadasIniciales: "0",
         abonoCuotaActualInicial: "0",
+        totalPagadoInicial: "0",
+        saldoPendienteInicial: "0",
+        estado: "activo",
       });
       await loadData();
       setScreenMessage(
         cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0
           ? "Prestamo importado con avance previo registrado."
-          : "Prestamo creado con el porcentaje calculado automaticamente.",
+          : "Prestamo creado correctamente con el interes aplicado.",
       );
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
@@ -2199,6 +2480,7 @@ export default function Home() {
         [String(pagoData?.id ?? "")]: {
           aplicadoPrestamo: pagoAplicadoPrestamo,
           moraPagada: pagoMora,
+          origen: "manual" as const,
         },
       };
       savePaymentMetadata(nextPaymentMetadata);
@@ -2393,10 +2675,7 @@ export default function Home() {
   }
 
   function openLoanEditor(prestamo: Prestamo) {
-    const abonoActual =
-      prestamo.saldoRestante > 0 && prestamo.saldoCuotaActual < prestamo.valorCuota
-        ? roundCurrency(Math.max(prestamo.valorCuota - prestamo.saldoCuotaActual, 0))
-        : 0;
+    const historicalProgress = getLoanHistoricalProgress(prestamo);
 
     setLoanEditForm({
       prestamoId: prestamo.id,
@@ -2406,9 +2685,11 @@ export default function Home() {
       frecuenciaPago: prestamo.frecuenciaPago,
       porcentajeInteres: String(normalizeIntegerPercentage(prestamo.porcentajeInteres)),
       fechaInicio: prestamo.createdAt ? prestamo.createdAt.slice(0, 10) : getTodayInputDate(),
-      cuotasPagadasIniciales: String(prestamo.cuotasPagadas),
-      abonoCuotaActualInicial: String(abonoActual),
-      estado: prestamo.estado,
+      cuotasPagadasIniciales: String(historicalProgress.cuotasPagadas),
+      abonoCuotaActualInicial: formatFormMoney(historicalProgress.abonoActual),
+      totalPagadoInicial: formatFormMoney(historicalProgress.totalPagado),
+      saldoPendienteInicial: formatFormMoney(historicalProgress.saldoPendiente),
+      estado: historicalProgress.saldoPendiente <= 0 ? "pagado" : prestamo.estado || "activo",
     });
     setActiveTab("prestamos");
     setScreenMessage(`Editando prestamo de ${clientes.find((cliente) => cliente.id === prestamo.clienteId)?.nombre ?? "cliente"}.`);
@@ -2452,17 +2733,34 @@ export default function Home() {
         throw new Error("Los calculos del prestamo no son validos. Revisa capital, cuotas e interes.");
       }
 
+      const progress = deriveLoanProgressFromTotalPaid(loanEditForm);
       const cuotasPagadasIniciales = Math.min(
-        Math.max(Math.round(Number(loanEditForm.cuotasPagadasIniciales || 0)), 0),
+        Math.max(Math.round(Number(progress.cuotasPagadasIniciales || 0)), 0),
         numeroCuotas,
       );
-      const abonoCuotaActualInicial =
-        cuotasPagadasIniciales >= numeroCuotas
-          ? 0
-          : Math.min(
-              Math.max(Number(loanEditForm.abonoCuotaActualInicial || 0), 0),
-              calculation.installmentValue,
-            );
+      const abonoCuotaActualInicial = roundCurrency(
+        Math.max(Number(progress.abonoCuotaActualInicial || 0), 0),
+      );
+      const totalPagadoInicial = roundCurrency(Math.max(Number(progress.totalPagadoInicial || 0), 0));
+      const saldoPendienteInicial = roundCurrency(
+        Math.max(Number(progress.saldoPendienteInicial || 0), 0),
+      );
+
+      if (cuotasPagadasIniciales > numeroCuotas) {
+        throw new Error("Las cuotas pagadas no pueden ser mayores al total de cuotas.");
+      }
+
+      if (saldoPendienteInicial < 0 || totalPagadoInicial < 0) {
+        throw new Error("El saldo pendiente y el total pagado no pueden ser negativos.");
+      }
+
+      if (loanEditForm.estado === "pagado" && saldoPendienteInicial > 0) {
+        throw new Error("No puedes marcar como pagado un prestamo que aun tiene saldo pendiente.");
+      }
+
+      if (saldoPendienteInicial <= 0 && cuotasPagadasIniciales < numeroCuotas) {
+        throw new Error("Si el saldo ya es cero, las cuotas pagadas deben cubrir el total del prestamo.");
+      }
       const payload = {
         cliente_id: loanEditForm.clienteId,
         monto_prestado: calculation.capital,
@@ -2470,7 +2768,7 @@ export default function Home() {
         porcentaje_interes: calculation.interestRatePercent,
         fecha_inicio: createIsoDateFromInput(loanEditForm.fechaInicio),
         estado:
-          cuotasPagadasIniciales >= numeroCuotas && abonoCuotaActualInicial <= 0
+          saldoPendienteInicial <= 0
             ? "pagado"
             : loanEditForm.estado || "activo",
       };
@@ -2480,7 +2778,7 @@ export default function Home() {
         numero_cuotas: calculation.installmentCount,
         fecha_inicio: createIsoDateFromInput(loanEditForm.fechaInicio),
         estado:
-          cuotasPagadasIniciales >= numeroCuotas && abonoCuotaActualInicial <= 0
+          saldoPendienteInicial <= 0
             ? "pagado"
             : loanEditForm.estado || "activo",
       };
@@ -2530,27 +2828,33 @@ export default function Home() {
       saveLoanMetadata(nextMetadata);
       setLoanMetadata(nextMetadata);
 
-      const existingPayments = pagos.filter((pago) => pago.prestamoId === loanEditForm.prestamoId);
+      const paymentMetadata = readPaymentMetadata();
+      const existingPaymentsForLoan = pagos.filter((pago) => pago.prestamoId === loanEditForm.prestamoId);
+      const importedPaymentIds = existingPaymentsForLoan
+        .filter((pago) => paymentMetadata[pago.id]?.origen === "base_importado")
+        .map((pago) => pago.id);
+      const hasManualPayments = existingPaymentsForLoan.some(
+        (pago) => paymentMetadata[pago.id]?.origen !== "base_importado",
+      );
 
-      if (existingPayments.length > 0) {
-        const existingPaymentIds = existingPayments.map((pago) => pago.id);
+      if (importedPaymentIds.length > 0) {
         const { error: deletePaymentsError } = await supabase
           .from("pagos")
           .delete()
-          .eq("prestamo_id", loanEditForm.prestamoId);
+          .in("id", importedPaymentIds);
 
         if (deletePaymentsError) {
           throw deletePaymentsError;
         }
 
         const nextPaymentMetadata = { ...readPaymentMetadata() };
-        existingPaymentIds.forEach((paymentId) => {
+        importedPaymentIds.forEach((paymentId) => {
           delete nextPaymentMetadata[paymentId];
         });
         savePaymentMetadata(nextPaymentMetadata);
       }
 
-      if (cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0) {
+      if ((cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0) && !hasManualPayments) {
         const generatedPayments = Array.from({ length: cuotasPagadasIniciales }, (_, index) => ({
           prestamo_id: loanEditForm.prestamoId,
           monto_pagado: calculation.installmentValue,
@@ -2592,6 +2896,7 @@ export default function Home() {
               ? abonoCuotaActualInicial
               : calculation.installmentValue,
             moraPagada: 0,
+            origen: "base_importado" as const,
           };
         });
 
@@ -2603,7 +2908,11 @@ export default function Home() {
       }
 
       await loadData();
-      setScreenMessage("Prestamo actualizado con historial base reconstruido correctamente.");
+      setScreenMessage(
+        hasManualPayments
+          ? "Prestamo actualizado sin borrar pagos reales. Se conservaron los pagos ya registrados."
+          : "Prestamo actualizado con historial base reconstruido correctamente.",
+      );
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
     }
@@ -3141,6 +3450,7 @@ export default function Home() {
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 >
                   <option value="activo">Activo</option>
+                  <option value="pendiente">Pendiente</option>
                   <option value="pagado">Pagado</option>
                 </select>
               </label>
@@ -3166,9 +3476,12 @@ export default function Home() {
                   min="1"
                   value={loanEditForm.montoCapital}
                   onChange={(event) =>
-                    setLoanEditForm((current) =>
-                      current ? { ...current, montoCapital: event.target.value } : current,
-                    )
+                    loanEditForm
+                      ? updateLoanEditFormFromTotalPaid({
+                          ...loanEditForm,
+                          montoCapital: event.target.value,
+                        })
+                      : undefined
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3181,9 +3494,12 @@ export default function Home() {
                   min="1"
                   value={loanEditForm.numeroCuotas}
                   onChange={(event) =>
-                    setLoanEditForm((current) =>
-                      current ? { ...current, numeroCuotas: event.target.value } : current,
-                    )
+                    loanEditForm
+                      ? updateLoanEditFormFromTotalPaid({
+                          ...loanEditForm,
+                          numeroCuotas: event.target.value,
+                        })
+                      : undefined
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3198,16 +3514,14 @@ export default function Home() {
                   step="1"
                   value={loanEditForm.porcentajeInteres}
                   onChange={(event) =>
-                    setLoanEditForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            porcentajeInteres: String(
-                              normalizeIntegerPercentage(event.target.value),
-                            ),
-                          }
-                        : current,
-                    )
+                    loanEditForm
+                      ? updateLoanEditFormFromTotalPaid({
+                          ...loanEditForm,
+                          porcentajeInteres: String(
+                            normalizeIntegerPercentage(event.target.value),
+                          ),
+                        })
+                      : undefined
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3244,22 +3558,20 @@ export default function Home() {
                   min="0"
                   value={loanEditForm.cuotasPagadasIniciales}
                   onChange={(event) =>
-                    setLoanEditForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            cuotasPagadasIniciales: String(
-                              Math.max(Math.round(Number(event.target.value || 0)), 0),
-                            ),
-                          }
-                        : current,
-                    )
+                    loanEditForm
+                      ? updateLoanEditFormFromInstallments({
+                          ...loanEditForm,
+                          cuotasPagadasIniciales: String(
+                            Math.max(Math.round(Number(event.target.value || 0)), 0),
+                          ),
+                        })
+                      : undefined
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
               </label>
 
-              <label className="flex flex-col gap-2 md:col-span-2">
+              <label className="flex flex-col gap-2">
                 <span className="text-sm font-semibold text-slate-700">
                   Abono ya realizado en la cuota actual
                 </span>
@@ -3268,25 +3580,60 @@ export default function Home() {
                   min="0"
                   value={loanEditForm.abonoCuotaActualInicial}
                   onChange={(event) =>
-                    setLoanEditForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            abonoCuotaActualInicial: String(
-                              Math.max(Number(event.target.value || 0), 0),
-                            ),
-                          }
-                        : current,
-                    )
+                    loanEditForm
+                      ? updateLoanEditFormFromInstallments({
+                          ...loanEditForm,
+                          abonoCuotaActualInicial: String(
+                            Math.max(Number(event.target.value || 0), 0),
+                          ),
+                        })
+                      : undefined
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Valor total ya pagado</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={loanEditForm.totalPagadoInicial}
+                  onChange={(event) =>
+                    loanEditForm
+                      ? updateLoanEditFormFromTotalPaid({
+                          ...loanEditForm,
+                          totalPagadoInicial: String(Math.max(Number(event.target.value || 0), 0)),
+                        })
+                      : undefined
+                  }
+                  className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                />
+              </label>
+
+              <label className="flex flex-col gap-2 md:col-span-2">
+                <span className="text-sm font-semibold text-slate-700">Saldo pendiente</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={loanEditForm.saldoPendienteInicial}
+                  onChange={(event) =>
+                    loanEditForm
+                      ? updateLoanEditFormFromPendingBalance({
+                          ...loanEditForm,
+                          saldoPendienteInicial: String(
+                            Math.max(Number(event.target.value || 0), 0),
+                          ),
+                        })
+                      : undefined
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
               </label>
 
               <div className="md:col-span-2 rounded-[22px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-                Si cambias estos datos historicos, el sistema vuelve a construir el historial base
-                del prestamo para que el saldo, cuotas y mora queden alineados con ese nuevo punto
-                de partida.
+                Si el prestamo viene de un sistema anterior, aqui puedes ajustar cuotas, total ya
+                pagado, saldo pendiente y estado sin borrar los pagos reales que ya existan.
               </div>
 
               <div className="md:col-span-2 flex flex-wrap gap-3">
@@ -4779,10 +5126,10 @@ export default function Home() {
                       min="1"
                       value={loanForm.montoCapital}
                       onChange={(event) =>
-                        setLoanForm((current) => ({
-                          ...current,
+                        updateLoanFormFromTotalPaid({
+                          ...loanForm,
                           montoCapital: event.target.value,
-                        }))
+                        })
                       }
                       required
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
@@ -4797,10 +5144,10 @@ export default function Home() {
                       min="1"
                       value={loanForm.numeroCuotas}
                       onChange={(event) =>
-                        setLoanForm((current) => ({
-                          ...current,
+                        updateLoanFormFromTotalPaid({
+                          ...loanForm,
                           numeroCuotas: event.target.value,
-                        }))
+                        })
                       }
                       required
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
@@ -4835,12 +5182,12 @@ export default function Home() {
                       min="0"
                       value={loanForm.cuotasPagadasIniciales}
                       onChange={(event) =>
-                        setLoanForm((current) => ({
-                          ...current,
+                        updateLoanFormFromInstallments({
+                          ...loanForm,
                           cuotasPagadasIniciales: String(
                             Math.max(Math.round(Number(event.target.value || 0)), 0),
                           ),
-                        }))
+                        })
                       }
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                       placeholder="0"
@@ -4857,16 +5204,74 @@ export default function Home() {
                     min="0"
                     value={loanForm.abonoCuotaActualInicial}
                     onChange={(event) =>
-                      setLoanForm((current) => ({
-                        ...current,
+                      updateLoanFormFromInstallments({
+                        ...loanForm,
                         abonoCuotaActualInicial: String(
                           Math.max(Number(event.target.value || 0), 0),
                         ),
-                      }))
+                      })
                     }
                     className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                     placeholder="0"
                   />
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Valor total ya pagado</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={loanForm.totalPagadoInicial}
+                      onChange={(event) =>
+                        updateLoanFormFromTotalPaid({
+                          ...loanForm,
+                          totalPagadoInicial: String(
+                            Math.max(Number(event.target.value || 0), 0),
+                          ),
+                        })
+                      }
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="0"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-slate-700">Saldo pendiente</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={loanForm.saldoPendienteInicial}
+                      onChange={(event) =>
+                        updateLoanFormFromPendingBalance({
+                          ...loanForm,
+                          saldoPendienteInicial: String(
+                            Math.max(Number(event.target.value || 0), 0),
+                          ),
+                        })
+                      }
+                      className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                      placeholder="0"
+                    />
+                  </label>
+                </div>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Estado del prestamo</span>
+                  <select
+                    value={loanForm.estado}
+                    onChange={(event) =>
+                      setLoanForm((current) => ({
+                        ...current,
+                        estado: event.target.value,
+                      }))
+                    }
+                    className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
+                  >
+                    <option value="activo">Activo</option>
+                    <option value="pendiente">Pendiente</option>
+                    <option value="pagado">Pagado</option>
+                  </select>
                 </label>
 
                 <label className="flex flex-col gap-2">
@@ -4900,12 +5305,12 @@ export default function Home() {
                     step="1"
                     value={loanForm.porcentajeInteres}
                     onChange={(event) =>
-                      setLoanForm((current) => ({
-                        ...current,
+                      updateLoanFormFromTotalPaid({
+                        ...loanForm,
                         porcentajeInteres: String(
                           normalizeIntegerPercentage(event.target.value),
                         ),
-                      }))
+                      })
                     }
                     required
                     className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
@@ -4914,9 +5319,8 @@ export default function Home() {
                 </label>
 
                 <div className="rounded-[22px] bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-                  Usa estos campos para importar prestamos antiguos: defines la fecha real de
-                  inicio, la frecuencia elegida, cuantas cuotas completas ya llevaba pagadas y
-                  cuanto llevaba abonado en la cuota actual.
+                  Para clientes migrados puedes registrar capital, interes, cuotas, total ya
+                  pagado, saldo pendiente y estado. El sistema mantiene esos valores sincronizados.
                 </div>
               </div>
 
