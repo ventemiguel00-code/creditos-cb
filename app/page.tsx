@@ -1242,6 +1242,35 @@ function validateManualLoanSnapshot({
   };
 }
 
+function recalculateManualLoanSnapshot(form: {
+  montoCapital: string;
+  numeroCuotas: string;
+  porcentajeInteres: string;
+  cuotasPagadasIniciales: string;
+  abonoCuotaActualInicial: string;
+  totalPagadoInicial: string;
+  saldoPendienteInicial: string;
+}) {
+  const totalPagadoTexto = String(form.totalPagadoInicial ?? "").trim();
+  const saldoPendienteTexto = String(form.saldoPendienteInicial ?? "").trim();
+  const cuotasPagadas = Math.max(Math.round(Number(form.cuotasPagadasIniciales || 0)), 0);
+  const abonoActual = Math.max(Number(form.abonoCuotaActualInicial || 0), 0);
+
+  if (totalPagadoTexto !== "" && Number(totalPagadoTexto) > 0) {
+    return deriveLoanProgressFromTotalPaid(form);
+  }
+
+  if (saldoPendienteTexto !== "" && Number(saldoPendienteTexto) > 0) {
+    return deriveLoanProgressFromPendingBalance(form);
+  }
+
+  if (cuotasPagadas > 0 || abonoActual > 0) {
+    return deriveLoanProgressFromInstallments(form);
+  }
+
+  return deriveLoanProgressFromInstallments(form);
+}
+
 async function loadInitialCapitalValue() {
   const localFallback =
     typeof window === "undefined"
@@ -2013,7 +2042,7 @@ export default function Home() {
   }
 
   function recalculateLoanFormValues() {
-    const synced = deriveLoanProgressFromInstallments(loanForm);
+    const synced = recalculateManualLoanSnapshot(loanForm);
     setLoanForm((current) => ({
       ...current,
       ...synced,
@@ -2025,7 +2054,7 @@ export default function Home() {
       return;
     }
 
-    const synced = deriveLoanProgressFromInstallments(loanEditForm);
+    const synced = recalculateManualLoanSnapshot(loanEditForm);
     setLoanEditForm((current) =>
       current
         ? {
