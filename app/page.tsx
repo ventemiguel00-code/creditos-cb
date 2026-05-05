@@ -33,6 +33,7 @@ type Cliente = {
 
 type Prestamo = {
   id: string;
+  codigoVisible: string;
   clienteId: string;
   montoCapital: number;
   numeroCuotas: number;
@@ -115,12 +116,27 @@ type PaymentMetadata = Record<
 
 type ProfitPeriod = "diario" | "semanal" | "quincenal" | "mensual";
 
+type MovementHistoryEntry = {
+  id: string;
+  createdAt: string;
+  cliente: string;
+  cedula: string;
+  prestamoId: string;
+  prestamoCodigo: string;
+  tipo: string;
+  valorAnterior: string;
+  valorNuevo: string;
+  descripcion: string;
+  usuario: string;
+};
+
 const INITIAL_CAPITAL_KEY = "creditos-cb-initial-capital";
 const LAST_CLEANUP_RUN_KEY = "creditos-cb-last-cleanup-run";
 const LOAN_METADATA_KEY = "creditos-cb-loan-metadata";
 const CLIENT_METADATA_KEY = "creditos-cb-client-metadata";
 const OBSERVATION_METADATA_KEY = "creditos-cb-observations";
 const PAYMENT_METADATA_KEY = "creditos-cb-payment-metadata";
+const MOVEMENT_HISTORY_KEY = "creditos-cb-movement-history";
 const PROFIT_DISTRIBUTION_KEY = "creditos-cb-profit-distribution";
 const DAILY_LATE_RATE_KEY = "creditos-cb-daily-late-rate";
 const APP_CONFIG_TABLE = "configuracion_app";
@@ -209,6 +225,16 @@ function formatCompactCurrency(value: number) {
   }
 
   return formatCurrency(value);
+}
+
+function getVisibleLoanCode(loanId: string) {
+  const compact = String(loanId || "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 6)
+    .toUpperCase()
+    .padEnd(6, "0");
+
+  return `PRE-${compact}`;
 }
 
 function mapCliente(row: Record<string, unknown>): Cliente {
@@ -323,6 +349,28 @@ function normalizeCedula(value: unknown) {
   return String(value ?? "").replace(/\D+/g, "").trim();
 }
 
+function normalizePhone(value: unknown) {
+  return String(value ?? "").replace(/\D+/g, "").trim();
+}
+
+function normalizePersonName(value: unknown) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isValidPersonName(value: string) {
+  return /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s.'-]+$/.test(value);
+}
+
+function isValidEmailAddress(value: string) {
+  if (!value) {
+    return true;
+  }
+
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
 function readClientMetadata(): ClientMetadata {
   if (typeof window === "undefined") {
     return {};
@@ -410,6 +458,27 @@ function savePaymentMetadata(metadata: PaymentMetadata) {
   window.localStorage.setItem(PAYMENT_METADATA_KEY, JSON.stringify(metadata));
 }
 
+function readMovementHistory(): MovementHistoryEntry[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(MOVEMENT_HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as MovementHistoryEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMovementHistory(entries: MovementHistoryEntry[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(MOVEMENT_HISTORY_KEY, JSON.stringify(entries));
+}
+
 function readDailyLateRate() {
   if (typeof window === "undefined") {
     return "2";
@@ -477,6 +546,7 @@ function mapPrestamo(row: Record<string, unknown>): Prestamo {
 
   return {
     id: String(row.id ?? ""),
+    codigoVisible: getVisibleLoanCode(String(row.id ?? "")),
     clienteId: String(row.cliente_id ?? ""),
     montoCapital,
     numeroCuotas: Number(row.numero_cuotas ?? row.cuotas ?? 0),
@@ -871,10 +941,12 @@ function buildReceiptWindowHtml({
             <div>
               <div class="section-title">Datos cliente</div>
               <div class="line"><span class="label">Nombre:</span> ${formatReceiptField(receiptData.cliente.nombre)}</div>
+              <div class="line"><span class="label">Cedula:</span> ${formatReceiptField(receiptData.cliente.cedula)}</div>
               <div class="line"><span class="label">Direccion:</span> ${formatReceiptField(receiptData.cliente.direccion)}</div>
             </div>
             <div>
               <div class="section-title">Extracto de manejo</div>
+              <div class="line"><span class="label">Prestamo:</span> ${formatReceiptField(receiptData.prestamo.codigoVisible)}</div>
               <div class="line"><span class="label">N de cuotas:</span> ${receiptData.prestamo.numeroCuotas}</div>
               <div class="line"><span class="label">Saldo en cuotas:</span> ${saldoEnCuotas}</div>
               <div class="line"><span class="label">Creditos en dias:</span> ${creditosEnDia}</div>
@@ -1127,6 +1199,49 @@ function deriveLoanProgressFromPendingBalance({
   });
 }
 
+function validateManualLoanSnapshot({
+  calculation,
+  numeroCuotas,
+  cuotasPagadasIniciales,
+  abonoCuotaActualInicial,
+  totalPagadoInicial,
+  saldoPendienteInicial,
+  estado,
+}: {
+  calculation: ReturnType<typeof calculateLoanValues>;
+  numeroCuotas: number;
+  cuotasPagadasIniciales: number;
+  abonoCuotaActualInicial: number;
+  totalPagadoInicial: number;
+  saldoPendienteInicial: number;
+  estado: string;
+}) {
+  const totalPagadoEsperado = roundCurrency(
+    cuotasPagadasIniciales * calculation.installmentValue + abonoCuotaActualInicial,
+  );
+  const saldoEsperado = roundCurrency(
+    Math.max(calculation.totalToCollect - totalPagadoEsperado, 0),
+  );
+  const estadoEsperado =
+    cuotasPagadasIniciales >= numeroCuotas || saldoEsperado <= 0 ? "pagado" : "activo";
+  const sameTotal = Math.abs(totalPagadoEsperado - totalPagadoInicial) <= 0.01;
+  const sameSaldo = Math.abs(saldoEsperado - saldoPendienteInicial) <= 0.01;
+  const estadoNormalizado = String(estado || "").trim().toLowerCase();
+  const estadoValido =
+    estadoEsperado === "pagado"
+      ? estadoNormalizado === "pagado"
+      : estadoNormalizado === "activo" || estadoNormalizado === "pendiente";
+
+  return {
+    totalPagadoEsperado,
+    saldoEsperado,
+    estadoEsperado,
+    sameTotal,
+    sameSaldo,
+    estadoValido,
+  };
+}
+
 async function loadInitialCapitalValue() {
   const localFallback =
     typeof window === "undefined"
@@ -1179,6 +1294,7 @@ export default function Home() {
     | "prestamos"
     | "pagos"
     | "historial"
+    | "movimientos"
     | "observaciones"
     | "configuracion"
   >("resumen");
@@ -1235,6 +1351,16 @@ export default function Home() {
     prestamoId: "",
     monto: "",
   });
+  const [loanSearch, setLoanSearch] = useState("");
+  const [movementHistory, setMovementHistory] = useState<MovementHistoryEntry[]>([]);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyClientFilter, setHistoryClientFilter] = useState("");
+  const [historyCedulaFilter, setHistoryCedulaFilter] = useState("");
+  const [historyLoanFilter, setHistoryLoanFilter] = useState("");
+  const [historyTypeFilter, setHistoryTypeFilter] = useState("");
+  const [historyDateFrom, setHistoryDateFrom] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
   const [dailyLateRateInput, setDailyLateRateInput] = useState(() => readDailyLateRate());
   const [selectedHistoryClientId, setSelectedHistoryClientId] = useState("");
   const [openTabGroup, setOpenTabGroup] = useState<"Operacion" | "Cobranza" | "Control" | "Ajustes">("Operacion");
@@ -1392,6 +1518,11 @@ export default function Home() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "pagos" },
+        scheduleRefresh,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "historial_movimientos" },
         scheduleRefresh,
       )
       .subscribe();
@@ -1575,6 +1706,7 @@ export default function Home() {
     if (shouldPersistClientMetadata) {
       saveClientMetadata(nextStoredClientMetadata);
     }
+    await loadMovementHistoryData();
     setInitialCapitalInput(String(initialCapitalResponse.value));
     setCapitalStorageMode(initialCapitalResponse.source);
   }
@@ -1782,6 +1914,83 @@ export default function Home() {
     reader.readAsDataURL(file);
   }
 
+  async function loadMovementHistoryData() {
+    const response = await supabase
+      .from("historial_movimientos")
+      .select("*")
+      .order("fecha_hora", { ascending: false });
+
+    if (response.error) {
+      if (isSchemaColumnError(response.error.message)) {
+        const localEntries = readMovementHistory().sort(
+          (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+        );
+        setMovementHistory(localEntries);
+        return;
+      }
+
+      throw response.error;
+    }
+
+    const entries = (response.data ?? []).map((row) => ({
+      id: String(row.id ?? ""),
+      createdAt: String(row.fecha_hora ?? row.created_at ?? new Date().toISOString()),
+      cliente: String(row.cliente ?? ""),
+      cedula: String(row.cedula ?? ""),
+      prestamoId: String(row.prestamo_id ?? ""),
+      prestamoCodigo: String(
+        row.prestamo_codigo ??
+          getVisibleLoanCode(String(row.prestamo_id ?? "")),
+      ),
+      tipo: String(row.tipo_movimiento ?? ""),
+      valorAnterior: String(row.valor_anterior ?? ""),
+      valorNuevo: String(row.valor_nuevo ?? ""),
+      descripcion: String(row.descripcion ?? ""),
+      usuario: String(row.usuario ?? "Administrador"),
+    }));
+
+    saveMovementHistory(entries);
+    setMovementHistory(entries);
+  }
+
+  async function logMovement(entry: Omit<MovementHistoryEntry, "id" | "createdAt">) {
+    const payload = {
+      fecha_hora: new Date().toISOString(),
+      cliente: entry.cliente,
+      cedula: entry.cedula,
+      prestamo_id: entry.prestamoId || null,
+      prestamo_codigo: entry.prestamoCodigo || null,
+      tipo_movimiento: entry.tipo,
+      valor_anterior: entry.valorAnterior,
+      valor_nuevo: entry.valorNuevo,
+      descripcion: entry.descripcion,
+      usuario: entry.usuario || "Administrador",
+    };
+
+    const response = await supabase.from("historial_movimientos").insert(payload).select("*").single();
+
+    if (response.error) {
+      if (!isSchemaColumnError(response.error.message)) {
+        throw response.error;
+      }
+
+      const localEntries = [
+        {
+          id: crypto.randomUUID(),
+          createdAt: payload.fecha_hora,
+          ...entry,
+          usuario: entry.usuario || "Administrador",
+        },
+        ...readMovementHistory(),
+      ];
+      saveMovementHistory(localEntries);
+      setMovementHistory(localEntries);
+      return;
+    }
+
+    await loadMovementHistoryData();
+  }
+
   function findDuplicateCedula(cedula: string, excludeClientId = "") {
     return clientes.find(
       (cliente) =>
@@ -1803,57 +2012,28 @@ export default function Home() {
     setPhotoPreview("");
   }
 
-  function updateLoanFormFromInstallments(
-    nextForm: typeof loanForm,
-    nextStateOverride?: Partial<typeof loanForm>,
-  ) {
-    const synced = deriveLoanProgressFromInstallments(nextForm);
-    setLoanForm({
-      ...nextForm,
+  function recalculateLoanFormValues() {
+    const synced = deriveLoanProgressFromInstallments(loanForm);
+    setLoanForm((current) => ({
+      ...current,
       ...synced,
-      ...(nextStateOverride ?? {}),
-    });
+    }));
   }
 
-  function updateLoanFormFromTotalPaid(nextForm: typeof loanForm) {
-    const synced = deriveLoanProgressFromTotalPaid(nextForm);
-    setLoanForm({
-      ...nextForm,
-      ...synced,
-    });
-  }
+  function recalculateLoanEditFormValues() {
+    if (!loanEditForm) {
+      return;
+    }
 
-  function updateLoanFormFromPendingBalance(nextForm: typeof loanForm) {
-    const synced = deriveLoanProgressFromPendingBalance(nextForm);
-    setLoanForm({
-      ...nextForm,
-      ...synced,
-    });
-  }
-
-  function updateLoanEditFormFromInstallments(nextForm: LoanEditForm, nextStateOverride?: Partial<LoanEditForm>) {
-    const synced = deriveLoanProgressFromInstallments(nextForm);
-    setLoanEditForm({
-      ...nextForm,
-      ...synced,
-      ...(nextStateOverride ?? {}),
-    });
-  }
-
-  function updateLoanEditFormFromTotalPaid(nextForm: LoanEditForm) {
-    const synced = deriveLoanProgressFromTotalPaid(nextForm);
-    setLoanEditForm({
-      ...nextForm,
-      ...synced,
-    });
-  }
-
-  function updateLoanEditFormFromPendingBalance(nextForm: LoanEditForm) {
-    const synced = deriveLoanProgressFromPendingBalance(nextForm);
-    setLoanEditForm({
-      ...nextForm,
-      ...synced,
-    });
+    const synced = deriveLoanProgressFromInstallments(loanEditForm);
+    setLoanEditForm((current) =>
+      current
+        ? {
+            ...current,
+            ...synced,
+          }
+        : current,
+    );
   }
 
   function getImportedPaymentIds(prestamoId: string) {
@@ -1936,10 +2116,36 @@ export default function Home() {
     setScreenMessage("");
 
     try {
+      const previousClient = clientEditId
+        ? clientes.find((cliente) => cliente.id === clientEditId) ?? null
+        : null;
+      const nombre = normalizePersonName(clientForm.nombre);
       const cedula = normalizeCedula(clientForm.cedula);
+      const telefono = normalizePhone(clientForm.telefono);
+      const correo = clientForm.correo.trim().toLowerCase();
+
+      if (!nombre) {
+        throw new Error("El nombre del cliente es obligatorio.");
+      }
+
+      if (!isValidPersonName(nombre)) {
+        throw new Error("El nombre del cliente solo puede contener letras y espacios.");
+      }
 
       if (!cedula) {
         throw new Error("La cedula del cliente es obligatoria.");
+      }
+
+      if (!telefono) {
+        throw new Error("El telefono del cliente es obligatorio.");
+      }
+
+      if (!correo && clientForm.correo.trim()) {
+        throw new Error("El correo ingresado no es valido.");
+      }
+
+      if (!isValidEmailAddress(correo)) {
+        throw new Error("El correo ingresado no es valido.");
       }
 
       const duplicateClient = findDuplicateCedula(cedula, clientEditId);
@@ -1949,19 +2155,18 @@ export default function Home() {
       }
 
       const basePayload = {
-        nombre: clientForm.nombre.trim(),
+        nombre,
         cedula,
         direccion: clientForm.direccion.trim(),
-        telefono: clientForm.telefono.trim(),
+        telefono,
         fecha_registro: createIsoDateFromInput(clientForm.fechaIngreso),
       };
       const basePayloadWithoutCedula = {
-        nombre: clientForm.nombre.trim(),
+        nombre,
         direccion: clientForm.direccion.trim(),
-        telefono: clientForm.telefono.trim(),
+        telefono,
         fecha_registro: createIsoDateFromInput(clientForm.fechaIngreso),
       };
-      const correo = clientForm.correo.trim();
       const foto = photoPreview.trim();
       const payloads: Record<string, unknown>[] = [
         { ...basePayload, correo, foto_url: foto },
@@ -2016,6 +2221,33 @@ export default function Home() {
         },
       };
       saveClientMetadata(nextClientMetadata);
+      await logMovement({
+        cliente: clientForm.nombre.trim(),
+        cedula,
+        prestamoId: "",
+        prestamoCodigo: "",
+        tipo: clientEditId ? "Edicion de cliente" : "Creacion de cliente",
+        valorAnterior: previousClient
+          ? JSON.stringify({
+              nombre: previousClient.nombre,
+              cedula: previousClient.cedula,
+              telefono: previousClient.telefono,
+              direccion: previousClient.direccion,
+              correo: previousClient.correo,
+            })
+          : "--",
+        valorNuevo: JSON.stringify({
+          nombre,
+          cedula,
+          telefono,
+          direccion: clientForm.direccion.trim(),
+          correo,
+        }),
+        descripcion: clientEditId
+          ? "Cliente actualizado desde el formulario principal."
+          : "Cliente registrado manualmente.",
+        usuario: "Administrador",
+      });
       resetClientForm();
       await loadData();
       setActiveTab("clientes");
@@ -2056,17 +2288,16 @@ export default function Home() {
         throw new Error("Los calculos del prestamo no son validos. Revisa capital, cuotas e interes.");
       }
 
-      const progress = deriveLoanProgressFromTotalPaid(loanForm);
       const cuotasPagadasIniciales = Math.min(
-        Math.max(Math.round(Number(progress.cuotasPagadasIniciales || 0)), 0),
+        Math.max(Math.round(Number(loanForm.cuotasPagadasIniciales || 0)), 0),
         numeroCuotas,
       );
       const abonoCuotaActualInicial = roundCurrency(
-        Math.max(Number(progress.abonoCuotaActualInicial || 0), 0),
+        Math.max(Number(loanForm.abonoCuotaActualInicial || 0), 0),
       );
-      const totalPagadoInicial = roundCurrency(Math.max(Number(progress.totalPagadoInicial || 0), 0));
+      const totalPagadoInicial = roundCurrency(Math.max(Number(loanForm.totalPagadoInicial || 0), 0));
       const saldoPendienteInicial = roundCurrency(
-        Math.max(Number(progress.saldoPendienteInicial || 0), 0),
+        Math.max(Number(loanForm.saldoPendienteInicial || 0), 0),
       );
 
       if (cuotasPagadasIniciales > numeroCuotas) {
@@ -2077,12 +2308,20 @@ export default function Home() {
         throw new Error("El saldo pendiente y el total pagado no pueden ser negativos.");
       }
 
-      if (loanForm.estado === "pagado" && saldoPendienteInicial > 0) {
-        throw new Error("No puedes marcar como pagado un prestamo que aun tiene saldo pendiente.");
-      }
+      const snapshotValidation = validateManualLoanSnapshot({
+        calculation,
+        numeroCuotas,
+        cuotasPagadasIniciales,
+        abonoCuotaActualInicial,
+        totalPagadoInicial,
+        saldoPendienteInicial,
+        estado: loanForm.estado,
+      });
 
-      if (saldoPendienteInicial <= 0 && cuotasPagadasIniciales < numeroCuotas) {
-        throw new Error("Si el saldo ya es cero, las cuotas pagadas deben cubrir el total del prestamo.");
+      if (!snapshotValidation.sameTotal || !snapshotValidation.sameSaldo || !snapshotValidation.estadoValido) {
+        throw new Error(
+          "Los valores manuales no coinciden entre si. Corrigelos manualmente o presiona Recalcular valores.",
+        );
       }
 
       const payload = {
@@ -2091,14 +2330,14 @@ export default function Home() {
         numero_cuotas: calculation.installmentCount,
         porcentaje_interes: calculation.interestRatePercent,
         fecha_inicio: createIsoDateFromInput(loanForm.fechaInicio),
-        estado: saldoPendienteInicial <= 0 ? "pagado" : loanForm.estado || "activo",
+        estado: snapshotValidation.estadoEsperado === "pagado" ? "pagado" : loanForm.estado || "activo",
       };
       const payloadWithoutPercentage = {
         cliente_id: loanForm.clienteId,
         monto_prestado: calculation.capital,
         numero_cuotas: calculation.installmentCount,
         fecha_inicio: createIsoDateFromInput(loanForm.fechaInicio),
-        estado: saldoPendienteInicial <= 0 ? "pagado" : loanForm.estado || "activo",
+        estado: snapshotValidation.estadoEsperado === "pagado" ? "pagado" : loanForm.estado || "activo",
       };
 
       const payloads = [
@@ -2213,6 +2452,32 @@ export default function Home() {
           savePaymentMetadata(nextPaymentMetadata);
         }
       }
+
+      await logMovement({
+        cliente: clientes.find((cliente) => cliente.id === loanForm.clienteId)?.nombre ?? "Cliente",
+        cedula: clientes.find((cliente) => cliente.id === loanForm.clienteId)?.cedula ?? "",
+        prestamoId: createdLoanId,
+        prestamoCodigo: getVisibleLoanCode(createdLoanId),
+        tipo:
+          cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0
+            ? "Creacion de prestamo migrado"
+            : "Creacion de prestamo",
+        valorAnterior: "--",
+        valorNuevo: JSON.stringify({
+          montoCapital: calculation.capital,
+          porcentajeInteres,
+          numeroCuotas: calculation.installmentCount,
+          totalPagadoInicial,
+          saldoPendienteInicial,
+          estado: loanForm.estado,
+          frecuenciaPago,
+        }),
+        descripcion:
+          cuotasPagadasIniciales > 0 || abonoCuotaActualInicial > 0
+            ? "Prestamo cargado manualmente desde datos anteriores."
+            : "Prestamo creado desde la aplicacion.",
+        usuario: "Administrador",
+      });
 
       setLoanForm({
         clienteId: "",
@@ -2528,6 +2793,32 @@ export default function Home() {
         pago,
       };
 
+      await logMovement({
+        cliente: cliente.nombre,
+        cedula: cliente.cedula,
+        prestamoId: prestamo.id,
+        prestamoCodigo: prestamo.codigoVisible,
+        tipo: pagoMora > 0 || !cuotaCompletada ? "Abono parcial" : "Registro de pago",
+        valorAnterior: JSON.stringify({
+          saldoAnterior: prestamo.saldoRestante,
+          estadoAnterior: prestamo.estado,
+          cuotasPagadasAnterior: prestamo.cuotasPagadas,
+        }),
+        valorNuevo: JSON.stringify({
+          saldoNuevo: prestamoActualizado.saldoRestante,
+          estadoNuevo: prestamoActualizado.estado,
+          cuotasPagadasNuevo: prestamoActualizado.cuotasPagadas,
+          montoPago,
+        }),
+        descripcion:
+          pagoMora > 0
+            ? "Pago registrado con mora asociada."
+            : !cuotaCompletada
+              ? "Abono parcial registrado sobre la cuota actual."
+              : "Pago registrado correctamente.",
+        usuario: "Administrador",
+      });
+
       setPaymentForm({ prestamoId: "", monto: "" });
       await loadData();
       openReceiptPrintWindow(receiptPayload);
@@ -2711,6 +3002,7 @@ export default function Home() {
     setScreenMessage("");
 
     try {
+      const previousLoan = prestamos.find((prestamo) => prestamo.id === loanEditForm.prestamoId) ?? null;
       const montoPrestado = Number(loanEditForm.montoCapital);
       const numeroCuotas = Number(loanEditForm.numeroCuotas);
       const frecuenciaPago = normalizePaymentFrequency(loanEditForm.frecuenciaPago);
@@ -2733,17 +3025,18 @@ export default function Home() {
         throw new Error("Los calculos del prestamo no son validos. Revisa capital, cuotas e interes.");
       }
 
-      const progress = deriveLoanProgressFromTotalPaid(loanEditForm);
       const cuotasPagadasIniciales = Math.min(
-        Math.max(Math.round(Number(progress.cuotasPagadasIniciales || 0)), 0),
+        Math.max(Math.round(Number(loanEditForm.cuotasPagadasIniciales || 0)), 0),
         numeroCuotas,
       );
       const abonoCuotaActualInicial = roundCurrency(
-        Math.max(Number(progress.abonoCuotaActualInicial || 0), 0),
+        Math.max(Number(loanEditForm.abonoCuotaActualInicial || 0), 0),
       );
-      const totalPagadoInicial = roundCurrency(Math.max(Number(progress.totalPagadoInicial || 0), 0));
+      const totalPagadoInicial = roundCurrency(
+        Math.max(Number(loanEditForm.totalPagadoInicial || 0), 0),
+      );
       const saldoPendienteInicial = roundCurrency(
-        Math.max(Number(progress.saldoPendienteInicial || 0), 0),
+        Math.max(Number(loanEditForm.saldoPendienteInicial || 0), 0),
       );
 
       if (cuotasPagadasIniciales > numeroCuotas) {
@@ -2754,12 +3047,20 @@ export default function Home() {
         throw new Error("El saldo pendiente y el total pagado no pueden ser negativos.");
       }
 
-      if (loanEditForm.estado === "pagado" && saldoPendienteInicial > 0) {
-        throw new Error("No puedes marcar como pagado un prestamo que aun tiene saldo pendiente.");
-      }
+      const snapshotValidation = validateManualLoanSnapshot({
+        calculation,
+        numeroCuotas,
+        cuotasPagadasIniciales,
+        abonoCuotaActualInicial,
+        totalPagadoInicial,
+        saldoPendienteInicial,
+        estado: loanEditForm.estado,
+      });
 
-      if (saldoPendienteInicial <= 0 && cuotasPagadasIniciales < numeroCuotas) {
-        throw new Error("Si el saldo ya es cero, las cuotas pagadas deben cubrir el total del prestamo.");
+      if (!snapshotValidation.sameTotal || !snapshotValidation.sameSaldo || !snapshotValidation.estadoValido) {
+        throw new Error(
+          "Los valores manuales no coinciden entre si. Corrigelos manualmente o presiona Recalcular valores.",
+        );
       }
       const payload = {
         cliente_id: loanEditForm.clienteId,
@@ -2768,7 +3069,7 @@ export default function Home() {
         porcentaje_interes: calculation.interestRatePercent,
         fecha_inicio: createIsoDateFromInput(loanEditForm.fechaInicio),
         estado:
-          saldoPendienteInicial <= 0
+          snapshotValidation.estadoEsperado === "pagado"
             ? "pagado"
             : loanEditForm.estado || "activo",
       };
@@ -2778,7 +3079,7 @@ export default function Home() {
         numero_cuotas: calculation.installmentCount,
         fecha_inicio: createIsoDateFromInput(loanEditForm.fechaInicio),
         estado:
-          saldoPendienteInicial <= 0
+          snapshotValidation.estadoEsperado === "pagado"
             ? "pagado"
             : loanEditForm.estado || "activo",
       };
@@ -2906,6 +3207,36 @@ export default function Home() {
       if (loanEditForm) {
         setLoanEditForm(null);
       }
+
+      await logMovement({
+        cliente: clientes.find((cliente) => cliente.id === loanEditForm.clienteId)?.nombre ?? "Cliente",
+        cedula: clientes.find((cliente) => cliente.id === loanEditForm.clienteId)?.cedula ?? "",
+        prestamoId: loanEditForm.prestamoId,
+        prestamoCodigo: getVisibleLoanCode(loanEditForm.prestamoId),
+        tipo: "Edicion de prestamo",
+        valorAnterior: previousLoan
+          ? JSON.stringify({
+              montoCapital: previousLoan.montoCapital,
+              porcentajeInteres: previousLoan.porcentajeInteres,
+              numeroCuotas: previousLoan.numeroCuotas,
+              saldoRestante: previousLoan.saldoRestante,
+              estado: previousLoan.estado,
+            })
+          : "--",
+        valorNuevo: JSON.stringify({
+          montoCapital: montoPrestado,
+          porcentajeInteres,
+          numeroCuotas,
+          totalPagadoInicial,
+          saldoPendienteInicial,
+          estado: loanEditForm.estado,
+          frecuenciaPago,
+        }),
+        descripcion: hasManualPayments
+          ? "Prestamo actualizado conservando pagos reales existentes."
+          : "Prestamo actualizado con reconstruccion de base historica.",
+        usuario: "Administrador",
+      });
 
       await loadData();
       setScreenMessage(
@@ -3137,6 +3468,24 @@ export default function Home() {
       .toLowerCase()
       .includes(normalizedClientSearch);
   });
+  const normalizedLoanSearch = loanSearch.trim().toLowerCase();
+  const visiblePrestamos = prestamos.filter((prestamo) => {
+    if (!normalizedLoanSearch) {
+      return true;
+    }
+
+    const cliente = clientes.find((item) => item.id === prestamo.clienteId);
+
+    return [
+      getVisibleLoanCode(prestamo.id),
+      cliente?.nombre ?? "",
+      cliente?.cedula ?? "",
+      prestamo.id,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedLoanSearch);
+  });
   const observacionesClienteDisponibles = visibleClientes;
   const paymentHistoryByClient = clientes
     .map((cliente) => {
@@ -3171,6 +3520,70 @@ export default function Home() {
     paymentHistoryByClient.find((group) => group.cliente.id === selectedHistoryClientId) ??
     paymentHistoryByClient[0] ??
     null;
+  const filteredMovementHistory = movementHistory
+    .filter((entry) => {
+      const normalizedSearch = historySearch.trim().toLowerCase();
+
+      if (normalizedSearch) {
+        const matchesSearch = [
+          entry.cliente,
+          entry.cedula,
+          entry.prestamoId,
+          entry.prestamoCodigo,
+          entry.tipo,
+          entry.descripcion,
+          entry.usuario,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedSearch);
+
+        if (!matchesSearch) {
+          return false;
+        }
+      }
+
+      if (historyClientFilter && entry.cliente !== historyClientFilter) {
+        return false;
+      }
+
+      if (historyCedulaFilter && !entry.cedula.includes(historyCedulaFilter.trim())) {
+        return false;
+      }
+
+      if (historyLoanFilter) {
+        const normalizedLoanFilter = historyLoanFilter.trim().toLowerCase();
+
+        if (
+          !entry.prestamoId.toLowerCase().includes(normalizedLoanFilter) &&
+          !entry.prestamoCodigo.toLowerCase().includes(normalizedLoanFilter)
+        ) {
+          return false;
+        }
+      }
+
+      if (historyTypeFilter && entry.tipo !== historyTypeFilter) {
+        return false;
+      }
+
+      if (historyDateFrom && entry.createdAt.slice(0, 10) < historyDateFrom) {
+        return false;
+      }
+
+      if (historyDateTo && entry.createdAt.slice(0, 10) > historyDateTo) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const historyPageSize = 10;
+  const totalHistoryPages = Math.max(1, Math.ceil(filteredMovementHistory.length / historyPageSize));
+  const safeHistoryPage = Math.min(historyPage, totalHistoryPages);
+  const paginatedMovementHistory = filteredMovementHistory.slice(
+    (safeHistoryPage - 1) * historyPageSize,
+    safeHistoryPage * historyPageSize,
+  );
   const tabItems = [
     { id: "resumen", label: "Resumen" },
     { id: "vencimientos", label: "Vencimientos de hoy" },
@@ -3179,6 +3592,7 @@ export default function Home() {
     { id: "prestamos", label: "Prestamos" },
     { id: "pagos", label: "Pagos" },
     { id: "historial", label: "Historial de pago" },
+    { id: "movimientos", label: "Historial" },
     { id: "observaciones", label: "Observaciones" },
     { id: "ganancias", label: "Ganancias" },
     { id: "configuracion", label: "Configuracion" },
@@ -3196,7 +3610,9 @@ export default function Home() {
     },
     {
       label: "Control",
-      items: tabItems.filter((tab) => ["observaciones", "ganancias"].includes(tab.id)),
+      items: tabItems.filter((tab) =>
+        ["movimientos", "observaciones", "ganancias"].includes(tab.id),
+      ),
     },
     {
       label: "Ajustes",
@@ -3476,12 +3892,9 @@ export default function Home() {
                   min="1"
                   value={loanEditForm.montoCapital}
                   onChange={(event) =>
-                    loanEditForm
-                      ? updateLoanEditFormFromTotalPaid({
-                          ...loanEditForm,
-                          montoCapital: event.target.value,
-                        })
-                      : undefined
+                    setLoanEditForm((current) =>
+                      current ? { ...current, montoCapital: event.target.value } : current,
+                    )
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3494,12 +3907,9 @@ export default function Home() {
                   min="1"
                   value={loanEditForm.numeroCuotas}
                   onChange={(event) =>
-                    loanEditForm
-                      ? updateLoanEditFormFromTotalPaid({
-                          ...loanEditForm,
-                          numeroCuotas: event.target.value,
-                        })
-                      : undefined
+                    setLoanEditForm((current) =>
+                      current ? { ...current, numeroCuotas: event.target.value } : current,
+                    )
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3514,14 +3924,16 @@ export default function Home() {
                   step="1"
                   value={loanEditForm.porcentajeInteres}
                   onChange={(event) =>
-                    loanEditForm
-                      ? updateLoanEditFormFromTotalPaid({
-                          ...loanEditForm,
-                          porcentajeInteres: String(
-                            normalizeIntegerPercentage(event.target.value),
-                          ),
-                        })
-                      : undefined
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            porcentajeInteres: String(
+                              normalizeIntegerPercentage(event.target.value),
+                            ),
+                          }
+                        : current,
+                    )
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3558,14 +3970,16 @@ export default function Home() {
                   min="0"
                   value={loanEditForm.cuotasPagadasIniciales}
                   onChange={(event) =>
-                    loanEditForm
-                      ? updateLoanEditFormFromInstallments({
-                          ...loanEditForm,
-                          cuotasPagadasIniciales: String(
-                            Math.max(Math.round(Number(event.target.value || 0)), 0),
-                          ),
-                        })
-                      : undefined
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            cuotasPagadasIniciales: String(
+                              Math.max(Math.round(Number(event.target.value || 0)), 0),
+                            ),
+                          }
+                        : current,
+                    )
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3580,14 +3994,16 @@ export default function Home() {
                   min="0"
                   value={loanEditForm.abonoCuotaActualInicial}
                   onChange={(event) =>
-                    loanEditForm
-                      ? updateLoanEditFormFromInstallments({
-                          ...loanEditForm,
-                          abonoCuotaActualInicial: String(
-                            Math.max(Number(event.target.value || 0), 0),
-                          ),
-                        })
-                      : undefined
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            abonoCuotaActualInicial: String(
+                              Math.max(Number(event.target.value || 0), 0),
+                            ),
+                          }
+                        : current,
+                    )
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3600,12 +4016,16 @@ export default function Home() {
                   min="0"
                   value={loanEditForm.totalPagadoInicial}
                   onChange={(event) =>
-                    loanEditForm
-                      ? updateLoanEditFormFromTotalPaid({
-                          ...loanEditForm,
-                          totalPagadoInicial: String(Math.max(Number(event.target.value || 0), 0)),
-                        })
-                      : undefined
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            totalPagadoInicial: String(
+                              Math.max(Number(event.target.value || 0), 0),
+                            ),
+                          }
+                        : current,
+                    )
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3618,14 +4038,16 @@ export default function Home() {
                   min="0"
                   value={loanEditForm.saldoPendienteInicial}
                   onChange={(event) =>
-                    loanEditForm
-                      ? updateLoanEditFormFromPendingBalance({
-                          ...loanEditForm,
-                          saldoPendienteInicial: String(
-                            Math.max(Number(event.target.value || 0), 0),
-                          ),
-                        })
-                      : undefined
+                    setLoanEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            saldoPendienteInicial: String(
+                              Math.max(Number(event.target.value || 0), 0),
+                            ),
+                          }
+                        : current,
+                    )
                   }
                   className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                 />
@@ -3637,6 +4059,13 @@ export default function Home() {
               </div>
 
               <div className="md:col-span-2 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={recalculateLoanEditFormValues}
+                  className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm font-bold text-amber-800 transition hover:bg-amber-100"
+                >
+                  Recalcular valores
+                </button>
                 <button
                   type="submit"
                   className="brand-button rounded-2xl px-5 py-3 text-sm font-bold transition"
@@ -4812,9 +5241,13 @@ export default function Home() {
                     <input
                       value={clientForm.telefono}
                       onChange={(event) =>
-                        setClientForm((current) => ({ ...current, telefono: event.target.value }))
+                        setClientForm((current) => ({
+                          ...current,
+                          telefono: normalizePhone(event.target.value),
+                        }))
                       }
                       required
+                      inputMode="numeric"
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                       placeholder="3001234567"
                     />
@@ -5126,10 +5559,10 @@ export default function Home() {
                       min="1"
                       value={loanForm.montoCapital}
                       onChange={(event) =>
-                        updateLoanFormFromTotalPaid({
-                          ...loanForm,
+                        setLoanForm((current) => ({
+                          ...current,
                           montoCapital: event.target.value,
-                        })
+                        }))
                       }
                       required
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
@@ -5144,10 +5577,10 @@ export default function Home() {
                       min="1"
                       value={loanForm.numeroCuotas}
                       onChange={(event) =>
-                        updateLoanFormFromTotalPaid({
-                          ...loanForm,
+                        setLoanForm((current) => ({
+                          ...current,
                           numeroCuotas: event.target.value,
-                        })
+                        }))
                       }
                       required
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
@@ -5182,12 +5615,12 @@ export default function Home() {
                       min="0"
                       value={loanForm.cuotasPagadasIniciales}
                       onChange={(event) =>
-                        updateLoanFormFromInstallments({
-                          ...loanForm,
+                        setLoanForm((current) => ({
+                          ...current,
                           cuotasPagadasIniciales: String(
                             Math.max(Math.round(Number(event.target.value || 0)), 0),
                           ),
-                        })
+                        }))
                       }
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                       placeholder="0"
@@ -5204,12 +5637,12 @@ export default function Home() {
                     min="0"
                     value={loanForm.abonoCuotaActualInicial}
                     onChange={(event) =>
-                      updateLoanFormFromInstallments({
-                        ...loanForm,
+                      setLoanForm((current) => ({
+                        ...current,
                         abonoCuotaActualInicial: String(
                           Math.max(Number(event.target.value || 0), 0),
                         ),
-                      })
+                      }))
                     }
                     className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                     placeholder="0"
@@ -5224,12 +5657,12 @@ export default function Home() {
                       min="0"
                       value={loanForm.totalPagadoInicial}
                       onChange={(event) =>
-                        updateLoanFormFromTotalPaid({
-                          ...loanForm,
+                        setLoanForm((current) => ({
+                          ...current,
                           totalPagadoInicial: String(
                             Math.max(Number(event.target.value || 0), 0),
                           ),
-                        })
+                        }))
                       }
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                       placeholder="0"
@@ -5243,12 +5676,12 @@ export default function Home() {
                       min="0"
                       value={loanForm.saldoPendienteInicial}
                       onChange={(event) =>
-                        updateLoanFormFromPendingBalance({
-                          ...loanForm,
+                        setLoanForm((current) => ({
+                          ...current,
                           saldoPendienteInicial: String(
                             Math.max(Number(event.target.value || 0), 0),
                           ),
-                        })
+                        }))
                       }
                       className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
                       placeholder="0"
@@ -5305,12 +5738,12 @@ export default function Home() {
                     step="1"
                     value={loanForm.porcentajeInteres}
                     onChange={(event) =>
-                      updateLoanFormFromTotalPaid({
-                        ...loanForm,
+                      setLoanForm((current) => ({
+                        ...current,
                         porcentajeInteres: String(
                           normalizeIntegerPercentage(event.target.value),
                         ),
-                      })
+                      }))
                     }
                     required
                     className="h-13 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-green-500"
@@ -5380,12 +5813,21 @@ export default function Home() {
               )}
 
               <div className="xl:col-span-2">
-                <button
-                  type="submit"
-                  className="brand-button-secondary h-13 rounded-2xl px-5 text-sm font-bold transition"
-                >
-                  Crear prestamo
-                </button>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={recalculateLoanFormValues}
+                    className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm font-bold text-amber-800 transition hover:bg-amber-100"
+                  >
+                    Recalcular valores
+                  </button>
+                  <button
+                    type="submit"
+                    className="brand-button-secondary h-13 rounded-2xl px-5 text-sm font-bold transition"
+                  >
+                    Crear prestamo
+                  </button>
+                </div>
               </div>
             </form>
           </article>
@@ -5402,14 +5844,23 @@ export default function Home() {
               </div>
             </div>
 
+            <div className="mb-4">
+              <input
+                value={loanSearch}
+                onChange={(event) => setLoanSearch(event.target.value)}
+                placeholder="Buscar por ID de prestamo, cliente o cedula"
+                className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-green-500"
+              />
+            </div>
+
             <div className="grid gap-3 lg:hidden">
-              {prestamos.length === 0 ? (
+              {visiblePrestamos.length === 0 ? (
                 <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/60 p-5 text-sm text-slate-500">
-                  Aun no hay prestamos registrados.
+                  No se encontraron prestamos con ese criterio.
                 </div>
               ) : null}
 
-              {prestamos.map((prestamo) => {
+              {visiblePrestamos.map((prestamo) => {
                 const cliente =
                   clientes.find((item) => item.id === prestamo.clienteId)?.nombre ?? "Cliente";
 
@@ -5421,6 +5872,9 @@ export default function Home() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-lg font-black text-slate-900">{cliente}</h3>
+                        <p className="mt-1 text-xs font-bold uppercase tracking-[0.16em] text-sky-700">
+                          {prestamo.codigoVisible}
+                        </p>
                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                           {getLoanStatusLabel(prestamo)}
                         </p>
@@ -5482,6 +5936,7 @@ export default function Home() {
               <table className="min-w-full bg-white/80">
                 <thead className="bg-gradient-to-r from-green-700 via-green-600 to-sky-700 text-left text-xs uppercase tracking-[0.18em] text-white">
                   <tr>
+                    <th className="px-4 py-3">ID</th>
                     <th className="px-4 py-3">Cliente</th>
                     <th className="px-4 py-3">Capital</th>
                     <th className="px-4 py-3">Interes</th>
@@ -5495,13 +5950,14 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {prestamos.map((prestamo) => {
+                  {visiblePrestamos.map((prestamo) => {
                     const cliente =
                       clientes.find((item) => item.id === prestamo.clienteId)?.nombre ??
                       "Cliente";
 
                     return (
                       <tr key={prestamo.id} className="border-t border-slate-100 text-sm">
+                        <td className="px-4 py-3 font-semibold text-sky-700">{prestamo.codigoVisible}</td>
                         <td className="px-4 py-3 font-semibold text-slate-800">{cliente}</td>
                         <td className="px-4 py-3">{formatCurrency(prestamo.montoCapital)}</td>
                         <td className="px-4 py-3">{prestamo.porcentajeInteres}%</td>
@@ -5875,6 +6331,183 @@ export default function Home() {
                 })}
               </div>
             )}
+          </article>
+        </section>
+        ) : null}
+
+        {activeTab === "movimientos" ? (
+        <section className="grid gap-4">
+          <article className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-sky-700">
+                  Historial
+                </p>
+                <h2 className="section-title text-2xl font-black text-slate-900">
+                  Movimientos del sistema
+                </h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Aqui quedan registrados los cambios importantes hechos por el usuario principal.
+                </p>
+              </div>
+              <div className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm">
+                {filteredMovementHistory.length} movimientos
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-3">
+              <input
+                value={historySearch}
+                onChange={(event) => {
+                  setHistorySearch(event.target.value);
+                  setHistoryPage(1);
+                }}
+                placeholder="Buscar por texto"
+                className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-sky-500"
+              />
+              <select
+                value={historyClientFilter}
+                onChange={(event) => {
+                  setHistoryClientFilter(event.target.value);
+                  setHistoryPage(1);
+                }}
+                className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-sky-500"
+              >
+                <option value="">Todos los clientes</option>
+                {[...new Set(movementHistory.map((entry) => entry.cliente).filter(Boolean))].map((cliente) => (
+                  <option key={cliente} value={cliente}>
+                    {cliente}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={historyCedulaFilter}
+                onChange={(event) => {
+                  setHistoryCedulaFilter(normalizeCedula(event.target.value));
+                  setHistoryPage(1);
+                }}
+                placeholder="Filtrar por cedula"
+                className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-sky-500"
+              />
+              <input
+                value={historyLoanFilter}
+                onChange={(event) => {
+                  setHistoryLoanFilter(event.target.value);
+                  setHistoryPage(1);
+                }}
+                placeholder="Filtrar por ID prestamo"
+                className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-sky-500"
+              />
+              <select
+                value={historyTypeFilter}
+                onChange={(event) => {
+                  setHistoryTypeFilter(event.target.value);
+                  setHistoryPage(1);
+                }}
+                className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-sky-500"
+              >
+                <option value="">Todos los movimientos</option>
+                {[...new Set(movementHistory.map((entry) => entry.tipo).filter(Boolean))].map((tipo) => (
+                  <option key={tipo} value={tipo}>
+                    {tipo}
+                  </option>
+                ))}
+              </select>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="date"
+                  value={historyDateFrom}
+                  onChange={(event) => {
+                    setHistoryDateFrom(event.target.value);
+                    setHistoryPage(1);
+                  }}
+                  className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-sky-500"
+                />
+                <input
+                  type="date"
+                  value={historyDateTo}
+                  onChange={(event) => {
+                    setHistoryDateTo(event.target.value);
+                    setHistoryPage(1);
+                  }}
+                  className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-sky-500"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 hidden overflow-hidden rounded-[24px] border border-slate-200 lg:block">
+              <table className="min-w-full bg-white/80 text-sm">
+                <thead className="bg-gradient-to-r from-sky-700 via-sky-600 to-green-700 text-left text-xs uppercase tracking-[0.18em] text-white">
+                  <tr>
+                    <th className="px-4 py-3">Fecha</th>
+                    <th className="px-4 py-3">Cliente</th>
+                    <th className="px-4 py-3">Cedula</th>
+                    <th className="px-4 py-3">Prestamo</th>
+                    <th className="px-4 py-3">Tipo</th>
+                    <th className="px-4 py-3">Anterior</th>
+                    <th className="px-4 py-3">Nuevo</th>
+                    <th className="px-4 py-3">Descripcion</th>
+                    <th className="px-4 py-3">Usuario</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedMovementHistory.map((entry) => (
+                    <tr key={entry.id} className="border-t border-slate-100 align-top">
+                      <td className="px-4 py-3 whitespace-nowrap">{formatDate(entry.createdAt)}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-800">{entry.cliente || "--"}</td>
+                      <td className="px-4 py-3">{entry.cedula || "--"}</td>
+                      <td className="px-4 py-3">{entry.prestamoCodigo || entry.prestamoId || "--"}</td>
+                      <td className="px-4 py-3">{entry.tipo}</td>
+                      <td className="px-4 py-3 max-w-[220px] break-words text-xs text-slate-600">{entry.valorAnterior || "--"}</td>
+                      <td className="px-4 py-3 max-w-[220px] break-words text-xs text-slate-600">{entry.valorNuevo || "--"}</td>
+                      <td className="px-4 py-3 max-w-[260px] break-words text-xs text-slate-700">{entry.descripcion || "--"}</td>
+                      <td className="px-4 py-3">{entry.usuario || "Administrador"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:hidden">
+              {paginatedMovementHistory.map((entry) => (
+                <article
+                  key={entry.id}
+                  className="rounded-[24px] border border-white/60 bg-white/80 p-4 shadow-sm"
+                >
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-700">{entry.tipo}</p>
+                  <h3 className="mt-2 text-base font-black text-slate-900">{entry.cliente || "Sin cliente"}</h3>
+                  <p className="mt-1 text-xs text-slate-500">{formatDate(entry.createdAt)}</p>
+                  <div className="mt-3 grid gap-2 rounded-[18px] bg-slate-50 p-3 text-sm text-slate-600">
+                    <p><strong className="text-slate-900">Cedula:</strong> {entry.cedula || "--"}</p>
+                    <p><strong className="text-slate-900">Prestamo:</strong> {entry.prestamoCodigo || entry.prestamoId || "--"}</p>
+                    <p><strong className="text-slate-900">Descripcion:</strong> {entry.descripcion || "--"}</p>
+                    <p><strong className="text-slate-900">Usuario:</strong> {entry.usuario || "Administrador"}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className="mt-4 flex items-center justify-between">
+              <p className="text-sm text-slate-500">
+                Pagina {safeHistoryPage} de {totalHistoryPages}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setHistoryPage((current) => Math.max(current - 1, 1))}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Anterior
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryPage((current) => Math.min(current + 1, totalHistoryPages))}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Siguiente
+                </button>
+              </div>
+            </div>
           </article>
         </section>
         ) : null}

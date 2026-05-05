@@ -2,8 +2,8 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { AUTH_COOKIE_NAME, isValidSessionToken } from "@/lib/auth";
-import { formatShortDate } from "@/lib/loan-utils";
-import { fetchDashboardData } from "@/lib/server-data";
+import { formatDate, formatShortDate } from "@/lib/loan-utils";
+import { fetchDashboardData, fetchMovementHistoryData } from "@/lib/server-data";
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -19,7 +19,10 @@ export async function GET() {
     );
   }
 
-  const { clientes, prestamos, pagos, montoInicial } = await fetchDashboardData();
+  const [{ clientes, prestamos, pagos, montoInicial }, historialMovimientos] = await Promise.all([
+    fetchDashboardData(),
+    fetchMovementHistoryData(),
+  ]);
 
   const workbook = XLSX.utils.book_new();
 
@@ -30,6 +33,7 @@ export async function GET() {
     ["Clientes", clientes.length],
     ["Prestamos", prestamos.length],
     ["Pagos", pagos.length],
+    ["Movimientos", historialMovimientos.length],
   ];
   const clientesSheet = clientes.map((cliente) => ({
     Nombre: cliente.nombre,
@@ -56,6 +60,17 @@ export async function GET() {
     CuotaNumero: pago.cuota_numero,
     FechaPago: formatShortDate(pago.fecha_pago),
   }));
+  const historialSheet = historialMovimientos.map((movimiento) => ({
+    FechaHora: formatDate(movimiento.fecha_hora),
+    Cliente: movimiento.cliente ?? "",
+    Cedula: movimiento.cedula ?? "",
+    PrestamoID: movimiento.prestamo_codigo ?? movimiento.prestamo_id ?? "",
+    TipoMovimiento: movimiento.tipo_movimiento ?? "",
+    ValorAnterior: movimiento.valor_anterior ?? "",
+    ValorNuevo: movimiento.valor_nuevo ?? "",
+    Descripcion: movimiento.descripcion ?? "",
+    Usuario: movimiento.usuario ?? "",
+  }));
 
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(resumen), "Resumen");
   XLSX.utils.book_append_sheet(
@@ -69,6 +84,11 @@ export async function GET() {
     "Prestamos",
   );
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(pagosSheet), "Pagos");
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet(historialSheet),
+    "Historial",
+  );
 
   const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
 

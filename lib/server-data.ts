@@ -40,6 +40,20 @@ type PagoRow = {
   fecha_pago: string | null;
 };
 
+type HistorialMovimientoRow = {
+  id: string;
+  fecha_hora: string | null;
+  cliente: string | null;
+  cedula: string | null;
+  prestamo_id: string | null;
+  prestamo_codigo: string | null;
+  tipo_movimiento: string | null;
+  valor_anterior: string | null;
+  valor_nuevo: string | null;
+  descripcion: string | null;
+  usuario: string | null;
+};
+
 function normalizeServerPaymentFrequency(value: string | null | undefined): LoanFrequency {
   const normalized = String(value ?? "")
     .trim()
@@ -154,6 +168,31 @@ export async function fetchDashboardData() {
     pagos,
     montoInicial: Number(configResponse.data?.monto_inicial ?? 0),
   };
+}
+
+export async function fetchMovementHistoryData() {
+  const supabase = createServerSupabaseClient();
+  const response = await supabase
+    .from("historial_movimientos")
+    .select("*")
+    .order("fecha_hora", { ascending: false });
+
+  if (response.error) {
+    const message = response.error.message.toLowerCase();
+
+    if (
+      message.includes("does not exist") ||
+      message.includes("schema cache") ||
+      message.includes("relation") ||
+      message.includes("42p01")
+    ) {
+      return [] as HistorialMovimientoRow[];
+    }
+
+    throw response.error;
+  }
+
+  return (response.data ?? []) as HistorialMovimientoRow[];
 }
 
 export async function cleanupOldData() {
