@@ -2852,11 +2852,13 @@ export default function Home() {
       await loadData();
       openReceiptPrintWindow(receiptPayload);
       setScreenMessage(
-        pagoMora > 0
-          ? "Pago registrado con mora y recibo listo para imprimir."
-          : cuotaCompletada
-            ? "Pago registrado y recibo listo para imprimir."
-            : "Abono parcial registrado y recibo listo para imprimir.",
+        requestedAmount > 0 && requestedAmount > totalExigible
+          ? `Se registro ${formatCurrency(montoPago)} porque el valor exigible actual era ${formatCurrency(totalExigible)}. Recibo listo para imprimir.`
+          : pagoMora > 0
+            ? "Pago registrado con mora y recibo listo para imprimir."
+            : cuotaCompletada
+              ? "Pago registrado y recibo listo para imprimir."
+              : "Abono parcial registrado y recibo listo para imprimir.",
       );
     } catch (error) {
       setScreenMessage(getErrorMessage(error));
